@@ -1,0 +1,24 @@
+{
+  "name": "csw",
+  "version": "1.0.0",
+  "description": "Query Cisco Secure Workload (CSW/Tetration) API for environment reports, policy analysis, scopes, filters, connectors, and workload inventory.",
+  "author": {
+    "name": "Lance Travis"
+  },
+  "keywords": ["cisco", "csw", "tetration", "secure-workload", "micro-segmentation"],
+  "license": "MIT",
+  "userConfig": {
+    "CSW_API_URL": {
+      "description": "CSW cluster URL (e.g., https://csw.example.com)",
+      "sensitive": false
+    },
+    "CSW_API_KEY": {
+      "description": "CSW API key (hex string)",
+      "sensitive": true
+    },
+    "CSW_API_SECRET": {
+      "description": "CSW API secret (hex string)",
+      "sensitive": true
+    }
+  }
+}
