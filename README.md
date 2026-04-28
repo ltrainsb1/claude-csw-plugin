@@ -51,6 +51,8 @@ export CSW_VERIFY_SSL=false
 
 ## Usage
 
+### Read-only commands
+
 | Command | Description |
 |---------|-------------|
 | `/csw report` | Full environment overview (scopes, inventory, agents, connectors) |
@@ -61,6 +63,31 @@ export CSW_VERIFY_SSL=false
 | `/csw inventory [query]` | Search workloads by IP, hostname, OS, or label |
 | `/csw flows [src] [dst] [port]` | Search observed traffic flows |
 | `/csw agents [host]` | Agent/sensor status and versions |
+
+### Workflows
+
+Each workflow runs a guided discovery, then recommends a single next step. Any write call (POST/PUT/DELETE, enforcement toggles, ADM runs, agent upgrades, etc.) is gated — see **Write Actions** below.
+
+| Command | Description |
+|---------|-------------|
+| `/csw lifecycle [workspace]` | Policy lifecycle: ADM → review diff → publish → enforce |
+| `/csw investigate [src] [dst] [port]` | Flow investigation: search → quick analyze → propose fix |
+| `/csw onboard` | Stand up a new scope + filter + workspace (sequential gates) |
+| `/csw upgrade [filter]` | Agent fleet status and staged upgrade plan |
+| `/csw audit` | Compliance audit: coverage gaps, enforcement state, orphans (read-only) |
+| `/csw triage [connector]` | Connector / orchestrator failure triage with root-cause categorization |
+
+## Write Actions
+
+This skill never performs a write call (create / modify / delete) without explicit, in-session, per-call approval.
+
+For every write, the assistant will:
+
+1. Read the target object first and show its current state.
+2. Render a **WRITE ACTION** warning block with method, path, target, body summary, blast radius, reversibility, and risk tier (LOW / MEDIUM / HIGH).
+3. Wait for the literal approval phrase: `approve <tier> <short-id>` (e.g., `approve high 6532abf1`).
+
+Anything other than the exact phrase is treated as denial. Prior approval (a change ticket, a Slack thread, an earlier "yes" in the session) does **not** authorize the next call — each call gets its own gate. Multi-step workflows gate each step independently and never bundle approvals.
 
 ## API Key Capabilities
 
