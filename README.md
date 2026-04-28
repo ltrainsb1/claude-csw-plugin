@@ -89,6 +89,8 @@ For every write, the assistant will:
 
 Anything other than the exact phrase is treated as denial. Prior approval (a change ticket, a Slack thread, an earlier "yes" in the session) does **not** authorize the next call — each call gets its own gate. Multi-step workflows gate each step independently and never bundle approvals.
 
+For **homogeneous bulk operations** (e.g., deleting many filters of the same kind), the assistant may render a single consolidated warning showing the full list and accept `approve all <kind> <list-hash>` instead of N per-call phrases — but only when every item is the same resource kind and same action. Mixed batches, agent upgrades, and privilege changes are never bulk-approved.
+
 ## API Key Capabilities
 
 Your CSW API key needs specific capabilities depending on which commands you use:

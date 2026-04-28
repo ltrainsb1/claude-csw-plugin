@@ -120,6 +120,29 @@ Default is per-call. A bulk approval is only acceptable when ALL of the followin
 
 The bulk warning still uses the highest tier present in the batch. After approval, execute calls sequentially and report each result. If any call fails, **stop** — do not continue the batch without re-approval.
 
+**Bulk warning template:**
+
+```
+BULK WRITE ACTION — <TIER>
+  Method:        <METHOD>
+  Path pattern:  /openapi/v1/<resource_kind>/{id}
+  Action:        <e.g. DELETE | POST .../enable_enforce | PUT for label edit>
+  Item count:    <N>
+  Items (full list, no truncation):
+    | id       | name     | risk-relevant field                         |
+    |----------|----------|---------------------------------------------|
+    | <id1>    | <name1>  | <e.g. policies referencing this filter: 0>  |
+    | <id2>    | <name2>  | ...                                         |
+    | ...      | ...      | ...                                         |
+  List hash:     <sha256(sorted_ids).hexdigest()[:8]>
+  Blast radius:  <one line covering the batch as a whole>
+  Reversible?:   <yes/no + how — same answer must apply to every item>
+  Notes:         <items dropped from the batch and why, if any>
+
+To proceed, reply exactly:  approve all <resource_kind> <list-hash>
+Anything else cancels.
+```
+
 When bulk-approve is **not** the right tool: agent fleet upgrades and any privilege change. For those, recommend the user script it themselves outside the chat.
 
 ### Warning block template
@@ -373,15 +396,32 @@ After any workflow phase, end with **one** concrete recommended next step (not a
 
 ## API Capabilities Required
 
-Different commands need different API key capabilities. Inform the user if their key needs additional permissions:
+CSW API keys are issued with specific capabilities, and most capabilities can be granted as read-only or read+write. **Workflows that perform writes need a key with the write tier of the relevant capability** — discovery will succeed on a read-only key, then the gated write call returns 403. Before starting a write workflow, confirm the user's key has the right tier (or be ready to surface the 403 cleanly).
 
-| Command | Required Capability |
-|---------|-------------------|
-| report | `flow_inventory_query`, `user_role_scope_management` |
-| policy | `app_policy_management` |
-| scopes | `user_role_scope_management` |
-| filters | `flow_inventory_query` |
-| connectors | `external_integration` |
-| inventory | `flow_inventory_query` |
-| flows | `flow_inventory_query` |
-| agents | `sensor_management` |
+Inform the user if their key needs additional permissions.
+
+### Read-only commands
+
+| Command | Required Capability | Tier |
+|---------|--------------------|------|
+| report | `flow_inventory_query`, `user_role_scope_management` | Read |
+| policy | `app_policy_management` | Read |
+| scopes | `user_role_scope_management` | Read |
+| filters | `flow_inventory_query` | Read |
+| connectors | `external_integration` | Read |
+| inventory | `flow_inventory_query` | Read |
+| flows | `flow_inventory_query` | Read |
+| agents | `sensor_management` | Read |
+
+### Workflows
+
+| Workflow | Discovery (read-tier) | Recommended-write step (write-tier) |
+|----------|-----------------------|-------------------------------------|
+| lifecycle | `app_policy_management` | `app_policy_management` **write** — for `PUT /applications`, `enable_enforce`, `disable_enforce`, `submit_run` |
+| investigate | `flow_inventory_query`, `app_policy_management` | `app_policy_management` **write** — only if proposing a policy edit or creation |
+| onboard | `user_role_scope_management`, `flow_inventory_query` | `user_role_scope_management` **write** for scope/filter; `app_policy_management` **write** for workspace creation |
+| upgrade | `sensor_management` | `sensor_management` **write** — for `POST /sensors/{id}/upgrade` |
+| audit | `flow_inventory_query`, `user_role_scope_management`, `app_policy_management`, `sensor_management` | None — audit is read-only end-to-end |
+| triage | `external_integration` | `external_integration` **write** — for `PUT /orchestrators` or `POST /connector/rotate_certificates` |
+
+If a write call returns 401/403, tell the user: "Your API key has the right capability for discovery but not the write tier — re-issue the key with the write capability and retry."
