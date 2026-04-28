@@ -1,7 +1,7 @@
 {
   "name": "csw",
   "version": "1.0.0",
-  "description": "Query Cisco Secure Workload (CSW/Tetration) API: environment reports, policy analysis, scopes, filters, connectors, workload inventory, plus guided workflows (lifecycle, investigate, onboard, upgrade, audit, triage) with a per-call approval gate for any write action.",
+  "description": "Query Cisco Secure Workload (CSW/Tetration) API: environment reports, policy analysis, scopes, filters, connectors, workload inventory, plus guided workflows (lifecycle, investigate, onboard, upgrade, audit, triage, incident) with a per-call approval gate for any write action.",
   "author": {
     "name": "Lance Travis"
   },

@@ -1,9 +1,9 @@
 ---
 name: csw
-description: Use when the user asks about Cisco Secure Workload (CSW), Tetration, micro-segmentation, workload security, policy lifecycle, ADM, enforcement, agent/sensor fleet, scope or workspace onboarding, flow investigation, compliance audit, or connector/orchestrator triage. Covers read-only reporting and gated write actions.
+description: Use when the user asks about Cisco Secure Workload (CSW), Tetration, micro-segmentation, workload security, policy lifecycle, ADM, enforcement, agent/sensor fleet, scope or workspace onboarding, flow investigation, compliance audit, connector/orchestrator triage, or incident triage / fresh-alert response with containment options. Covers read-only reporting and gated write actions.
 user-invocable: true
 allowed-tools: Bash, Read, Write, WebFetch
-argument-hint: [report|policy|scopes|filters|connectors|inventory|flows|agents|lifecycle|investigate|onboard|upgrade|audit|triage] [optional query]
+argument-hint: [report|policy|scopes|filters|connectors|inventory|flows|agents|lifecycle|investigate|onboard|upgrade|audit|triage|incident] [optional query or paste]
 ---
 
 # Cisco Secure Workload (CSW) API Skill
@@ -544,5 +544,6 @@ Inform the user if their key needs additional permissions.
 | upgrade | `sensor_management` | `sensor_management` **write** — for `POST /sensors/{id}/upgrade` |
 | audit | `flow_inventory_query`, `user_role_scope_management`, `app_policy_management`, `sensor_management` | None — audit is read-only end-to-end |
 | triage | `external_integration` | `external_integration` **write** — for `PUT /orchestrators` or `POST /connector/rotate_certificates` |
+| incident | `flow_inventory_query`, `app_policy_management` | `app_policy_management` **write** for the chosen containment policy. **Plus** `user_role_scope_management` **write** if Option 1 or 2 needs to create a missing host or peer filter via `POST /inventory_filters` (matches the convention used by the onboard workflow). |
 
 If a write call returns 401/403, tell the user: "Your API key has the right capability for discovery but not the write tier — re-issue the key with the write capability and retry."

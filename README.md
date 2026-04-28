@@ -76,6 +76,7 @@ Each workflow runs a guided discovery, then recommends a single next step. Any w
 | `/csw upgrade [filter]` | Agent fleet status and staged upgrade plan |
 | `/csw audit` | Compliance audit: coverage gaps, enforcement state, orphans (read-only) |
 | `/csw triage [connector]` | Connector / orchestrator failure triage with root-cause categorization |
+| `/csw incident <paste>` | Fresh-alert triage: parse indicator, discover exposure (with IOC fan-out), present three ranked containment options |
 
 ## Write Actions
 
