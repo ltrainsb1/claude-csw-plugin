@@ -377,6 +377,127 @@ After any workflow phase, end with **one** concrete recommended next step (not a
 - Network → no API call. Recommend the user check the appliance, firewall, or proxy.
 - Upstream → no API call. Recommend checking the upstream system before any further CSW action.
 
+### Workflow: Incident Triage (`/csw incident <paste>`)
+
+**Triggers:** "incident", "fresh alert", "SOC paged", "we got an alert", "EDR flagged", "is this IP bad", "C2", "compromise", "isolate host", "quarantine", "who's talking to <indicator>", any free-form paste containing an IP/FQDN/hash with a suspected-malicious framing.
+
+**Use only for fresh-alert reactive triage** (one indicator, one moment, time-pressured analyst). For policy-gap analysis use `/csw investigate`. For active multi-host incident command, threat hunting, or post-mortem reconstruction, use the standard read-only commands directly.
+
+**Pre-step — capability preflight (RED finding: error path).** Before discovery, ask the user one question: "What capabilities does your CSW key have? At minimum I need `flow_inventory_query` (read) for discovery. For containment Options 1 and 2 I need `app_policy_management` **write** (and `user_role_scope_management` **write** if I have to create a missing host or peer filter)." If the user says read-only, run discovery anyway but state up front in the report: "**Read-only key — containment options will be informational only; you'll need a write-tier key to execute any of them.**" Do NOT render warning blocks for writes the key cannot execute.
+
+**Pipeline:**
+
+1. **Parse the paste** (text-only, no external lookups):
+   - Regex-extract indicators: IPv4, IPv6, FQDN, common hash lengths (MD5/SHA1/SHA256). Multiple per paste are OK.
+   - Extract any ISO 8601 / common SIEM timestamps for the alert anchor.
+   - Keep the original paste verbatim as "suspected behavior context" — surface it in the final report.
+
+2. **Classify each indicator:**
+   - IPs: `POST /openapi/v1/inventory/search` with `{"filter": {"type": "eq", "field": "ip", "value": "<ip>"}}`. Hit → internal-routable → inside-out branch. Miss → external → outside-in branch.
+   - FQDNs: do NOT do DNS resolution. Treat as external context only; act on FQDN only if the paste also contains an IP.
+   - Hashes: contextual only (CSW doesn't index file hashes). Surface in the report; don't drive queries.
+   - Mixed paste (one internal IP + one external IP) → run both branches and merge.
+
+3. **Discover** with adaptive time window: 1h → 24h → 7d, stop at the first window with ≥1 hit. Cold (no hits at 7d) → skip the option-builder, return a "cold indicator" report.
+   - **Outside-in:** `POST /openapi/v1/flow_search/flows` filtered by `src_address OR dst_address = <ext_ip>`. Capture internal endpoints touching, ports, byte/packet counts, action (allowed vs. denied). For each touching endpoint: `POST /openapi/v1/inventory/search` to get hostname/scope/labels. **IOC fan-out check (RED finding):** also run `POST /openapi/v1/flow_search/topn` with `dimension: src_address`, `filter: dst_address = <ext_ip>` to detect other hosts beaconing to the same external IP. Surface every host that hit the indicator, not just the one named in the alert.
+   - **Inside-out:** `POST /openapi/v1/flow_search/flows` filtered by `src OR dst = <int_ip>`. Tabulate top peers, top ports, cross-scope hops. For any suspicious peer-flow: `POST /openapi/v1/policies/{rootScopeID}/quick_analysis` to see which policy matched.
+   - Skip lateral peer-of-peer scans by default. Offer as drill-down only.
+
+4. **Workspace-state precondition (RED finding: enforcement-disabled trap).** Before building Options 1 and 2, GET each affected workspace and check `enforcement_enabled`. If `false`, the proposed deny policies will land in the analyzed version but **will NOT stop traffic** until enforcement is enabled (a separate HIGH gate). The option's warning block MUST surface this in its Notes line, e.g., `Notes: workspace prod-app-tier has enforcement_enabled=false; this policy alone will NOT block traffic. Either enable enforcement (separate HIGH gate) or pursue upstream containment (network ACL, NIC pull) — CSW will be the durable fix, not the 60-second fix.`
+
+5. **Build three ranked containment options** (ordered by speed of containment; show blast radius explicitly so the analyst trades disruption against speed):
+
+   **Option 1 — Host quarantine** (when host is highly suspected of compromise; broad disruption acceptable):
+   - **Pre-step (read-only):** identify the workspace currently governing the affected host (from inside-out discovery). Capture its `app_scope_id`, then `GET /openapi/v1/inventory_filters` filtered to that scope. Look for:
+     - A **host filter** matching just the affected host (e.g., `ip == 10.0.5.12`). For an arbitrary affected host, this filter often does NOT already exist.
+     - An **ANY filter** matching the entire scope (used as the "everything" side of the deny). May or may not exist.
+   - **Filter-creation gates (only if missing):**
+     - If host filter missing: propose `POST /openapi/v1/inventory_filters` with body `{"name": "incident-quarantine-<host>-<unix_ts>", "query": {"type": "eq", "field": "ip", "value": "<host_ip>"}, "app_scope_id": "<scope_id>"}`. **MEDIUM gate.** On approval, execute, capture the new `filter_id`.
+     - If ANY filter missing: do NOT auto-create. Ask the analyst to point at an existing one or escalate — ANY filters are workspace-architecture decisions, not incident-time decisions.
+   - **Once both filter ids are in hand,** propose **two** deny policies in the workspace at top priority:
+     - Inbound: `{"consumer_filter_id": <any_filter_id>, "provider_filter_id": <host_filter_id>, "action": "DENY", "priority": <top>}`
+     - Outbound: `{"consumer_filter_id": <host_filter_id>, "provider_filter_id": <any_filter_id>, "action": "DENY", "priority": <top>}`
+   - Calls: `POST /openapi/v1/applications/{ws}/policies` × 2 (HIGH gate each, separate warning blocks — never bundled).
+   - **Total writes:** 2-3 per incident depending on filter presence (always 2 deny policies; +1 if a host filter must be created; ANY filter is never auto-created).
+   - Risk tiers: **HIGH** for the deny policies; **MEDIUM** for any auto-created host filter.
+   - Reversibility: deny policies — yes, `DELETE` either; the auto-created host filter can be deleted after the incident, but check for other policies referencing it first.
+   - **Up-front transparency rule:** the option's summary in the tight output block must state the actual write count for *this* incident (e.g., "Option 1: 3 gated writes — 1 filter create + 2 deny policies"), based on what the pre-step found.
+
+   **Option 2 — Targeted hop block** (when host is critical and can't be isolated, but a specific bad communication channel must be cut):
+   - **Pre-step (read-only):** as in Option 1, GET inventory filters for the workspace. Need:
+     - A **host filter** for the affected host (often missing — same MEDIUM-gated creation as Option 1)
+     - A **peer filter** matching the bad peer's IP. For external peers (outside-in mode) this filter rarely exists; create with `POST /openapi/v1/inventory_filters` and body `{"name": "incident-peer-<peer>-<unix_ts>", "query": {"type": "eq", "field": "ip", "value": "<peer_ip>"}, "app_scope_id": "<scope_id>"}`. **MEDIUM gate.**
+   - One specific deny policy in the host's workspace: `{"consumer_filter_id": <host_filter>, "provider_filter_id": <peer_filter>, "action": "DENY", "l4_params": [{"port": <port>, "proto": <proto>}], "priority": <top>}`.
+   - Calls: `POST /openapi/v1/applications/{ws}/policies` × 1 + 0-2 filter creations.
+   - **Total writes:** 1-3 (always 1 deny policy; +1 if host filter must be created; +1 if peer filter must be created).
+   - Risk tiers: **HIGH** for the policy; **MEDIUM** for any auto-created filters.
+   - Reversibility: yes — `DELETE` the policy. Auto-created filters can be deleted post-incident.
+   - **Up-front transparency rule:** same as Option 1 — state the actual write count for this incident in the option's summary line.
+
+   **Option 3 — Scope tighten** (when the issue is a policy-design error, not a compromised host):
+   - Identify the overly-permissive ALLOW that let the bad traffic through (from `quick_analysis` result in step 3).
+   - Propose **either** edit that policy to be more restrictive (`PUT /openapi/v1/policies/{id}`) **or** add a higher-priority specific DENY in the same workspace (`POST .../policies`).
+   - Risk tier: **LOW** (PUT) or **MEDIUM** (POST).
+   - Reversibility: yes; takes effect on next enforcement push.
+   - If `quick_analysis` returned no match in step 3, **drop Option 3** and present only Options 1 and 2.
+
+6. **Present + Gate.** Render the tight incident format below. On the analyst's pick, the chosen option's proposed write routes through the existing **Write Actions — REQUIRED Approval Gate** verbatim — same warning template, same rationalizations table, same red flags. **Quarantine (2+ writes) gets separate warning blocks per write; the gate's "never bundle" rule applies in incident mode without exception.**
+
+#### Incident-mode output rules
+
+This workflow OVERRIDES the default `## Output Formatting` rules. Use this format instead:
+
+```
+INCIDENT TRIAGE — <indicator>
+TL;DR: <1-3 lines: indicator, exposure, verdict>
+Severity: <LOW|MEDIUM|HIGH|CRITICAL> — <one-line reason>
+
+Key facts:
+  - Window used: <1h | 24h | 7d>
+  - Internal hosts touching: <N> (<host1, host2, …>)   ← include fan-out hits, not just the alert host
+  - Top peers: <list>
+  - Action mix: allowed=<N>, denied=<N>
+  - Cross-scope flows: <yes/no>
+  - Affected workspace(s): <names> (enforcement_enabled: <true|false> per workspace)
+  - Key tier: <read-only | write-capable>
+
+Containment — pick one:
+
+  [1] Host quarantine    (HIGH, fastest, broad blast)   <N> gated writes  → reply: drill 1
+  [2] Targeted hop block (HIGH, fast, surgical)         <N> gated writes  → reply: drill 2
+  [3] Scope tighten      (LOW/MEDIUM, slowest)          <N> gated writes  → reply: drill 3
+
+Type "drill <N>" to see the full warning block for option N (still requires
+gate approval to execute). Type "drill peer <ip>" for a focused inside-out
+report. Type "full report" for the standard CSW skill markdown-table format.
+```
+
+If any affected workspace has `enforcement_enabled=false`, append this line under Key facts:
+```
+  - ⚠ Enforcement is OFF on <workspace>; CSW-side containment will not stop traffic until enforcement is enabled (separate HIGH gate) or you pursue upstream containment.
+```
+
+**Severity scoring (deterministic):**
+- **CRITICAL** — any *allowed* cross-scope flow involving an external indicator (data exfil / lateral movement candidate).
+- **HIGH** — any allowed flow to/from external indicator, OR ≥2 internal hosts touching.
+- **MEDIUM** — only denied flows observed, OR single host with no cross-scope movement.
+- **LOW** — indicator observed but no recent traffic.
+
+**Rules specific to incident mode (do not relax the gate):**
+- Incident pressure ("we need to act NOW", "the host is actively beaconing", "containment first, paperwork later") is the same shape as the existing rationalization row "Deadline / cutover / outage pressure". The same row applies. Do NOT add an incident-mode override.
+- The bulk-approve carve-out is technically available but **explicitly NOT recommended** in incident triage. The per-call pause is a feature in incidents, not friction to optimize away.
+- If the analyst picks Option 1 (quarantine = 2 policies), render the inbound-deny warning block first and wait for approval. After that approval and successful execution, render the outbound-deny warning block separately. Two phases, two phrases.
+- When `enforcement_enabled=false` for the target workspace, the Notes field of every write warning block must include the line: "Workspace is not enforcing — this write will NOT stop traffic by itself."
+
+**Failure modes:**
+- No indicator extractable from paste → ask the analyst to clarify; make zero API calls.
+- All indicators external, no internal flows touching → "no exposure" report; no options built.
+- Cold indicator (no flows in 7d) → cold-indicator badge; no options; offer baseline-behavior drill-down ("type 'drill baseline'").
+- Host in multiple workspaces → present them, ask which to target before building options.
+- CSW key has read but not policy-write → preflight catches this; report is informational only; no warning blocks rendered.
+- Discovery returned >25 peer hits → cap at top-25, flag truncation in the report.
+- Workspace lookup fails for the affected host → skip Options 1 and 2 for that host; recommend manual investigation.
+
 ## Output Formatting
 
 - Always use markdown tables for structured data
