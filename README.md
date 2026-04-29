@@ -142,6 +142,30 @@ These are guided multi-step flows: read-only discovery → single recommended ne
 - **When to use:** fresh-alert reactive triage (one indicator, one moment, time-pressured analyst).
 - **When NOT to use:** active multi-host incident command, threat hunting, post-mortem reconstruction (these are explicitly deferred).
 
+## Operator Reports
+
+Focused single-question reports against the live CSW cluster. All read-only end-to-end — never propose writes. Invoked via `/csw-reports <type>`. Lives in a separate skill (`skills/csw-reports/SKILL.md`) so it can evolve independently from the main `/csw` skill.
+
+### `/csw-reports posture` — Coverage & Enforcement Snapshot
+- **What it provides:** point-in-time metrics — % inventory covered by any scope, % workspaces enforcing, % workloads in enforcement mode, plus per-scope-tree breakdown.
+- **Endpoints:** `GET /openapi/v1/scopes`, `POST /openapi/v1/inventory/count`, `GET /openapi/v1/applications`, `POST /openapi/v1/inventory/search` (with `enforcement_status` dimension).
+- **When to use:** sanity-check segmentation maturity at a glance; before/after a major rollout; periodic posture review.
+
+### `/csw-reports drift` — Workspace & Agent Staleness
+- **What it provides:** workspaces whose enforced version lags latest analyzed; agents on stale software. Thresholds shown in report header.
+- **Endpoints:** `GET /openapi/v1/applications`, `GET /openapi/v1/sensors`, `GET /openapi/v1/software/versions`.
+- **When to use:** "what hasn't been published lately"; pre-audit cleanup; identifying out-of-date agents.
+
+### `/csw-reports noisy` — Top-N Operational Pain Points
+- **What it provides:** four ranked lists (top 10 each) — busiest workspaces, highest DENY-hit ratio, biggest catch-all DENY absorption, most policies. Tells you where to look next.
+- **Endpoints:** `GET /openapi/v1/applications`, `POST /openapi/v1/policies/stats/enforced` (per workspace).
+- **When to use:** "where should I focus this week"; finding workspaces with policy gaps (catch-all hits) or technical debt (high policy counts).
+
+### `/csw-reports gaps` — Onboarding Incompleteness
+- **What it provides:** scopes without workspaces, workspaces without policies, filters without policies, workloads not enforcing despite scope intent. Each row points at the workflow that would address it.
+- **Endpoints:** `GET /openapi/v1/scopes`, `GET /openapi/v1/applications`, `GET /openapi/v1/inventory_filters`, `POST /openapi/v1/inventory/search` (with `enforcement_status` dimension).
+- **When to use:** initial deployment progress check; finding partial-onboards left behind by a migration.
+
 ## Write Actions
 
 This skill never performs a write call (create / modify / delete) without explicit, in-session, per-call approval.
