@@ -9,14 +9,20 @@
   "license": "MIT",
   "userConfig": {
     "CSW_API_URL": {
+      "type": "string",
+      "title": "CSW API URL",
       "description": "CSW cluster URL (e.g., https://csw.example.com)",
       "sensitive": false
     },
     "CSW_API_KEY": {
+      "type": "string",
+      "title": "CSW API Key",
       "description": "CSW API key (hex string)",
       "sensitive": true
     },
     "CSW_API_SECRET": {
+      "type": "string",
+      "title": "CSW API Secret",
       "description": "CSW API secret (hex string)",
       "sensitive": true
     }
