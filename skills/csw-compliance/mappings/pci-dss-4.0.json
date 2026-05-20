@@ -2,7 +2,7 @@
   "framework": {
     "id": "pci-dss-4.0",
     "name": "PCI DSS",
-    "version": "4.0",
+    "version": "v4.0",
     "source": "https://github.com/chandrapati/CSW-Compliance-Mapping (CSW-PCI-DSS-Technical-Runbook)",
     "retrieved": "2026-05-20",
     "disclaimer": "CSW evidence status, NOT a compliance attestation."
