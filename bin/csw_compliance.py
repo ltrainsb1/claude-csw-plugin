@@ -67,7 +67,7 @@ KNOWN_PRIMITIVES = frozenset({
 })
 
 
-def load_mapping(path):
+def load_mapping(path, na_token="not_evidenceable"):
     if not os.path.exists(path):
         raise FileNotFoundError(f"Mapping file not found: {path}")
     with open(path, "r", encoding="utf-8") as fh:
@@ -93,12 +93,12 @@ def load_mapping(path):
         if not c.get("id"):
             raise ValueError(f"{path}: a control is missing 'id'")
         ev = c.get("evidence")
-        if ev != "not_evidenceable" and ev not in KNOWN_PRIMITIVES:
+        if ev != na_token and ev not in KNOWN_PRIMITIVES:
             raise ValueError(
                 f"{path}: control {c['id']} references unknown evidence '{ev}'. "
-                f"Known primitives: {sorted(KNOWN_PRIMITIVES)} or 'not_evidenceable'."
+                f"Known primitives: {sorted(KNOWN_PRIMITIVES)} or '{na_token}'."
             )
-        if ev != "not_evidenceable":
+        if ev != na_token:
             rule = c.get("verdict_rule")
             if rule is None:
                 raise ValueError(f"{path}: control {c['id']} missing 'verdict_rule'")

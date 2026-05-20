@@ -181,6 +181,22 @@ under `skills/csw-compliance/mappings/`.
 - Gaps point at the gated `/csw` remediation workflows; never proposes writes.
 - Add a framework = add one JSON mapping file, no code change.
 
+## ATT&CK Coverage
+
+Adversary-technique **coverage** (not compliance) against the live cluster:
+which MITRE ATT&CK techniques CSW provides mitigation/detection signal for.
+Read-only end-to-end. Invoked via `/csw-attack-coverage <matrix>`. Lives in its
+own skill (`skills/csw-attack-coverage/SKILL.md`) with pluggable matrix files
+under `skills/csw-attack-coverage/mappings/`.
+
+### `/csw-attack-coverage <matrix> [scope]` — MITRE ATT&CK Coverage
+- Technique→CSW-capability→live-signal mappings (MITRE ATT&CK Enterprise v15 ships first).
+- Coverage vocabulary: Covered / Partial / Not-covered / Out-of-scope. **Coverage is
+  not proof a technique is prevented or detected**, and is deliberately separate from
+  the compliance skill (which uses Satisfied/Gap and a compliance disclaimer).
+- Reuses the same read-only evidence primitives and HMAC helper as the compliance skill.
+- Not-covered/Partial techniques point at the gated `/csw` workflows; never proposes writes.
+
 ## Write Actions
 
 This skill never performs a write call (create / modify / delete) without explicit, in-session, per-call approval.
