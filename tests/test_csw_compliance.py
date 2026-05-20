@@ -238,7 +238,7 @@ class TestShippedMappings(unittest.TestCase):
 
 class TestRender(unittest.TestCase):
     def test_render_contains_disclaimer_and_all_buckets(self):
-        fw = {"id": "pci", "name": "PCI DSS", "version": "4.0",
+        fw = {"id": "pci", "name": "PCI DSS", "version": "v4.0",
               "source": "https://example/pci", "retrieved": "2026-05-20",
               "disclaimer": "CSW evidence status, not a compliance attestation."}
         results = {"summary": {"Satisfied": 1, "Partial": 0, "Gap": 1,

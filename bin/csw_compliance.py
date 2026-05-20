@@ -310,7 +310,7 @@ def run_framework(mapping, fetch):
 def render_markdown(fw, results, cluster_url):
     s = results["summary"]
     lines = []
-    lines.append(f"COMPLIANCE EVIDENCE — {fw['name']} v{fw['version']} — {cluster_url}")
+    lines.append(f"COMPLIANCE EVIDENCE — {fw['name']} {fw['version']} — {cluster_url}")
     lines.append(f"Source: {fw['source']} (retrieved {fw['retrieved']})")
     lines.append(f"⚠ {fw['disclaimer']} Process/people controls are out of scope "
                  f"and shown as \"Not-evidenceable\".")
