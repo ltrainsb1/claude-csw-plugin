@@ -201,3 +201,41 @@ PRIMITIVES = {
     "connector_health": connector_health,
     "scope_coverage_ratio": scope_coverage_ratio,
 }
+
+
+POINTERS = {
+    "enforcing_workspaces_ratio": "/csw lifecycle",
+    "inventory_enforcement_ratio": "/csw lifecycle",
+    "agent_coverage": "/csw upgrade",
+    "flow_visibility_present": "/csw connectors",
+    "connector_health": "/csw triage",
+    "scope_coverage_ratio": "/csw onboard",
+}
+
+
+def run_control(control, fetch):
+    ev = control["evidence"]
+    cid = control["id"]
+    base = {"id": cid, "intent": control.get("intent", ""),
+            "csw_capability": control.get("csw_capability", ""),
+            "evidence_display": "", "pointer": "", "reason": ""}
+    if ev == "not_evidenceable":
+        base["status"] = "Not-evidenceable"
+        base["pointer"] = "(manual)"
+        return base
+    meas = PRIMITIVES[ev](fetch, scope=control.get("scope_hint"))
+    status = evaluate_verdict(ev, meas, control["verdict_rule"])
+    base["status"] = status
+    base["evidence_display"] = meas.get("display", "")
+    base["reason"] = meas.get("reason") or ""
+    if status in ("Gap", "Partial"):
+        base["pointer"] = POINTERS.get(ev, "")
+    return base
+
+
+def run_framework(mapping, fetch):
+    rows = [run_control(c, fetch) for c in mapping["controls"]]
+    summary = {s: 0 for s in ALL_STATUSES}
+    for r in rows:
+        summary[r["status"]] = summary.get(r["status"], 0) + 1
+    return {"summary": summary, "rows": rows}

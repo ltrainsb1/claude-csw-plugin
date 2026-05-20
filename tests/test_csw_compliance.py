@@ -110,5 +110,35 @@ class TestLoadMapping(unittest.TestCase):
             cc.load_mapping(os.path.join(self.FX, "bad_mapping.json"))
 
 
+class TestRunFramework(unittest.TestCase):
+    def _mapping(self):
+        return {
+            "framework": {"id": "t", "name": "T", "version": "1", "source": "s",
+                          "retrieved": "2026-05-20", "disclaimer": "d"},
+            "controls": [
+                {"id": "A.1", "intent": "seg", "csw_capability": "micro-segmentation",
+                 "evidence": "enforcing_workspaces_ratio",
+                 "verdict_rule": {"satisfied": ">=0.95", "partial": ">=0.5", "else": "gap"}},
+                {"id": "A.2", "intent": "gov", "csw_capability": "none", "evidence": "not_evidenceable"},
+            ],
+        }
+
+    def test_summary_counts_sum_to_controls(self):
+        f = fake_fetch({("GET", "/openapi/v1/applications"): {"status": 200, "data": [
+            {"name": "a", "enforcement_enabled": True}]}})
+        out = cc.run_framework(self._mapping(), f)
+        self.assertEqual(sum(out["summary"].values()), 2)
+        self.assertEqual(out["summary"]["Satisfied"], 1)
+        self.assertEqual(out["summary"]["Not-evidenceable"], 1)
+
+    def test_pointer_for_gap(self):
+        f = fake_fetch({("GET", "/openapi/v1/applications"): {"status": 200, "data": [
+            {"name": "a", "enforcement_enabled": False}]}})
+        out = cc.run_framework(self._mapping(), f)
+        gap_row = [r for r in out["rows"] if r["id"] == "A.1"][0]
+        self.assertEqual(gap_row["status"], "Gap")
+        self.assertTrue(gap_row["pointer"])  # non-empty pointer for a gap
+
+
 if __name__ == "__main__":
     unittest.main()
