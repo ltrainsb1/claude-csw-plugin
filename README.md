@@ -166,6 +166,21 @@ Focused single-question reports against the live CSW cluster. All read-only end-
 - **Endpoints:** `GET /openapi/v1/scopes`, `GET /openapi/v1/applications`, `GET /openapi/v1/inventory_filters`, `POST /openapi/v1/inventory/search` (with `enforcement_status` dimension).
 - **When to use:** initial deployment progress check; finding partial-onboards left behind by a migration.
 
+## Compliance Evidence
+
+Framework control mappings run against the live cluster, reporting four-state
+evidence (Satisfied / Partial / Gap / Not-evidenceable). Read-only end-to-end.
+Invoked via `/csw-compliance <framework>`. Lives in its own skill
+(`skills/csw-compliance/SKILL.md`) with pluggable per-framework mapping files
+under `skills/csw-compliance/mappings/`.
+
+### `/csw-compliance <framework> [scope]` — Live Compliance Evidence
+- Distilled control→CSW-capability→live-query mappings (PCI DSS v4.0 ships first).
+- Deterministic verdicts; standing disclaimer that this is CSW evidence status,
+  not a compliance attestation (process/people controls shown as Not-evidenceable).
+- Gaps point at the gated `/csw` remediation workflows; never proposes writes.
+- Add a framework = add one JSON mapping file, no code change.
+
 ## Write Actions
 
 This skill never performs a write call (create / modify / delete) without explicit, in-session, per-call approval.
