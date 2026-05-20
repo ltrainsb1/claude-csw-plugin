@@ -31,6 +31,68 @@ class TestEvaluateVerdict(unittest.TestCase):
         self.assertEqual(cc.evaluate_verdict("enforcing_workspaces_ratio", m, self.RULE), "Indeterminate")
 
 
+def fake_fetch(routes):
+    """routes: dict[(method, path)] -> envelope. Records calls."""
+    calls = []
+    def _fetch(method, path, body=None):
+        calls.append((method, path, body))
+        return routes.get((method, path), {"status": 404, "data": None, "error": "no route"})
+    _fetch.calls = calls
+    return _fetch
+
+
+class TestPrimitives(unittest.TestCase):
+    def test_enforcing_workspaces_ratio(self):
+        f = fake_fetch({("GET", "/openapi/v1/applications"): {"status": 200, "data": [
+            {"name": "prod-a", "enforcement_enabled": True},
+            {"name": "prod-b", "enforcement_enabled": True},
+            {"name": "dev-c", "enforcement_enabled": False},
+        ]}})
+        m = cc.PRIMITIVES["enforcing_workspaces_ratio"](f)
+        self.assertAlmostEqual(m["value"], 2/3)
+        self.assertIn("2/3", m["display"])
+
+    def test_scope_filter(self):
+        f = fake_fetch({("GET", "/openapi/v1/applications"): {"status": 200, "data": [
+            {"name": "prod-a", "enforcement_enabled": True},
+            {"name": "dev-c", "enforcement_enabled": False},
+        ]}})
+        m = cc.PRIMITIVES["enforcing_workspaces_ratio"](f, scope="prod")
+        self.assertEqual(m["value"], 1.0)
+
+    def test_403_is_indeterminate(self):
+        f = fake_fetch({("GET", "/openapi/v1/applications"): {"status": 403, "data": None, "error": "Forbidden"}})
+        m = cc.PRIMITIVES["enforcing_workspaces_ratio"](f)
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("capability missing", m["reason"])
+
+    def test_flow_visibility_present(self):
+        f = fake_fetch({("POST", "/openapi/v1/flow_search/flows"): {"status": 200, "data": {"results": [{"x": 1}]}}})
+        m = cc.PRIMITIVES["flow_visibility_present"](f)
+        self.assertEqual(m["value"], "present")
+
+    def test_flow_visibility_absent(self):
+        f = fake_fetch({("POST", "/openapi/v1/flow_search/flows"): {"status": 200, "data": {"results": []}}})
+        m = cc.PRIMITIVES["flow_visibility_present"](f)
+        self.assertEqual(m["value"], "absent")
+
+    def test_registry_matches_catalog(self):
+        # Registry (callables) must exactly match the loader's catalog (names).
+        self.assertEqual(set(cc.PRIMITIVES), set(cc.KNOWN_PRIMITIVES))
+
+    def test_no_mutating_paths(self):
+        # Guard: exercising every primitive must never call a mutating endpoint.
+        f = fake_fetch({})
+        for name, fn in cc.PRIMITIVES.items():
+            fn(f)
+        banned = ("enable_enforce", "disable_enforce", "submit_run", "commit_query_changes")
+        for method, path, _ in f.calls:
+            self.assertIn(method, ("GET", "POST"))
+            self.assertFalse(any(b in path for b in banned), f"{name} hit mutating path {path}")
+            if method == "POST":
+                self.assertIn(path, ("/openapi/v1/inventory/search", "/openapi/v1/flow_search/flows"))
+
+
 class TestLoadMapping(unittest.TestCase):
     FX = os.path.join(os.path.dirname(__file__), "fixtures")
 

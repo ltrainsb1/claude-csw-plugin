@@ -89,3 +89,115 @@ def load_mapping(path):
         if ev != "not_evidenceable" and "verdict_rule" not in c:
             raise ValueError(f"{path}: control {c['id']} missing 'verdict_rule'")
     return data
+
+
+def _indet_if_bad(resp, path):
+    s = resp.get("status")
+    if s in (401, 403):
+        return measurement(indeterminate=True, reason=f"capability missing: {path} (HTTP {s})")
+    if s != 200:
+        return measurement(indeterminate=True, reason=f"{path} returned HTTP {s}")
+    return None
+
+
+def _ratio(numerator, denominator, label):
+    if denominator == 0:
+        return measurement(indeterminate=True, reason=f"no {label} to measure (denominator 0)")
+    r = numerator / denominator
+    return measurement(value=r, display=f"{numerator}/{denominator} {label} ({r:.0%})")
+
+
+def enforcing_workspaces_ratio(fetch, scope=None):
+    path = "/openapi/v1/applications"
+    resp = fetch("GET", path)
+    bad = _indet_if_bad(resp, path)
+    if bad:
+        return bad
+    apps = resp.get("data") or []
+    if scope:
+        apps = [a for a in apps if scope.lower() in (a.get("name", "").lower())]
+    enforcing = sum(1 for a in apps if a.get("enforcement_enabled"))
+    return _ratio(enforcing, len(apps), "workspaces enforcing")
+
+
+def inventory_enforcement_ratio(fetch, scope=None):
+    cpath = "/openapi/v1/inventory/count"
+    cresp = fetch("GET", cpath)
+    bad = _indet_if_bad(cresp, cpath)
+    if bad:
+        return bad
+    total = (cresp.get("data") or {}).get("count", 0)
+    spath = "/openapi/v1/inventory/search"
+    body = {"filter": {"type": "eq", "field": "enforcement_status", "value": "enabled"},
+            "dimensions": ["ip"], "limit": 0}
+    sresp = fetch("POST", spath, body)
+    bad = _indet_if_bad(sresp, spath)
+    if bad:
+        return bad
+    enforcing = (sresp.get("data") or {}).get("total_count", 0)
+    return _ratio(enforcing, total, "workloads enforcing")
+
+
+def agent_coverage(fetch, scope=None):
+    path = "/openapi/v1/sensors"
+    resp = fetch("GET", path)
+    bad = _indet_if_bad(resp, path)
+    if bad:
+        return bad
+    sensors = resp.get("data") or []
+    healthy = sum(1 for s in sensors if (s.get("sensor_status") or "").lower() == "active")
+    return _ratio(healthy, len(sensors), "agents healthy")
+
+
+def flow_visibility_present(fetch, scope=None):
+    path = "/openapi/v1/flow_search/flows"
+    body = {"t0": "-86400s", "t1": "now", "filter": {}, "limit": 1}
+    resp = fetch("POST", path, body)
+    bad = _indet_if_bad(resp, path)
+    if bad:
+        return bad
+    results = (resp.get("data") or {}).get("results") or []
+    present = "present" if results else "absent"
+    return measurement(value=present, display=f"recent flows observed: {present}")
+
+
+def connector_health(fetch, scope=None):
+    path = "/openapi/v1/connectors"
+    resp = fetch("GET", path)
+    bad = _indet_if_bad(resp, path)
+    if bad:
+        return bad
+    conns = resp.get("data") or []
+    healthy = sum(1 for c in conns if (c.get("status") or "").lower() in ("active", "up", "healthy"))
+    return _ratio(healthy, len(conns), "connectors healthy")
+
+
+def scope_coverage_ratio(fetch, scope=None):
+    spath = "/openapi/v1/scopes"
+    sresp = fetch("GET", spath)
+    bad = _indet_if_bad(sresp, spath)
+    if bad:
+        return bad
+    scopes = sresp.get("data") or []
+    cpath = "/openapi/v1/inventory/count"
+    cresp = fetch("GET", cpath)
+    bad = _indet_if_bad(cresp, cpath)
+    if bad:
+        return bad
+    total = (cresp.get("data") or {}).get("count", 0)
+    # Coarse v1: presence of any non-root scope tree is the signal; a precise
+    # scoped-inventory ratio is deferred. Returns present/absent to avoid
+    # overstating precision.
+    present = "present" if len(scopes) > 1 else "absent"
+    _ = total  # reserved for future precise rollup
+    return measurement(value=present, display=f"defined scopes: {len(scopes)}")
+
+
+PRIMITIVES = {
+    "enforcing_workspaces_ratio": enforcing_workspaces_ratio,
+    "inventory_enforcement_ratio": inventory_enforcement_ratio,
+    "agent_coverage": agent_coverage,
+    "flow_visibility_present": flow_visibility_present,
+    "connector_health": connector_health,
+    "scope_coverage_ratio": scope_coverage_ratio,
+}
