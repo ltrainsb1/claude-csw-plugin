@@ -31,5 +31,22 @@ class TestEvaluateVerdict(unittest.TestCase):
         self.assertEqual(cc.evaluate_verdict("enforcing_workspaces_ratio", m, self.RULE), "Indeterminate")
 
 
+class TestLoadMapping(unittest.TestCase):
+    FX = os.path.join(os.path.dirname(__file__), "fixtures")
+
+    def test_loads_good_mapping(self):
+        m = cc.load_mapping(os.path.join(self.FX, "good_mapping.json"))
+        self.assertEqual(m["framework"]["id"], "test-fw-1.0")
+        self.assertTrue(len(m["controls"]) >= 1)
+
+    def test_missing_file_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            cc.load_mapping(os.path.join(self.FX, "nope.json"))
+
+    def test_unknown_primitive_raises(self):
+        with self.assertRaises(ValueError):
+            cc.load_mapping(os.path.join(self.FX, "bad_mapping.json"))
+
+
 if __name__ == "__main__":
     unittest.main()
