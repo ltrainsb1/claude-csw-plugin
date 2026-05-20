@@ -219,6 +219,22 @@ class TestShippedMappings(unittest.TestCase):
         # at least one honest not-evidenceable control
         self.assertTrue(any(c["evidence"] == "not_evidenceable" for c in m["controls"]))
 
+    def test_nist_loads_and_is_valid(self):
+        m = cc.load_mapping(cc.resolve_mapping_path("nist-800-53-rev5"))
+        self.assertEqual(m["framework"]["id"], "nist-800-53-rev5")
+        self.assertGreaterEqual(len(m["controls"]), 10)
+        self.assertTrue(any(c["evidence"] == "not_evidenceable" for c in m["controls"]))
+
+    def test_every_shipped_mapping_validates(self):
+        # Any JSON dropped into mappings/ must pass strict validation. This guards
+        # the "add a framework = add one JSON file" contract for all current and
+        # future mappings, with no per-framework test needed.
+        ids = cc.available_frameworks()
+        self.assertGreaterEqual(len(ids), 2)  # pci + nist at minimum
+        for fid in ids:
+            with self.subTest(framework=fid):
+                cc.load_mapping(cc.resolve_mapping_path(fid))
+
 
 class TestRender(unittest.TestCase):
     def test_render_contains_disclaimer_and_all_buckets(self):

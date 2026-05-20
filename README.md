@@ -175,7 +175,7 @@ Invoked via `/csw-compliance <framework>`. Lives in its own skill
 under `skills/csw-compliance/mappings/`.
 
 ### `/csw-compliance <framework> [scope]` — Live Compliance Evidence
-- Distilled control→CSW-capability→live-query mappings (PCI DSS v4.0 ships first).
+- Distilled control→CSW-capability→live-query mappings (PCI DSS v4.0 and NIST 800-53 Rev 5 ship today).
 - Deterministic verdicts; standing disclaimer that this is CSW evidence status,
   not a compliance attestation (process/people controls shown as Not-evidenceable).
 - Gaps point at the gated `/csw` remediation workflows; never proposes writes.
