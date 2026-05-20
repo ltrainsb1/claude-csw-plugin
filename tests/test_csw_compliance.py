@@ -80,6 +80,23 @@ class TestPrimitives(unittest.TestCase):
         # Registry (callables) must exactly match the loader's catalog (names).
         self.assertEqual(set(cc.PRIMITIVES), set(cc.KNOWN_PRIMITIVES))
 
+    def test_missing_count_key_is_indeterminate_not_false_gap(self):
+        # 200 OK but payload lacks the expected key → Indeterminate, never 0%/Gap.
+        f = fake_fetch({
+            ("GET", "/openapi/v1/inventory/count"): {"status": 200, "data": {"count": 100}},
+            ("POST", "/openapi/v1/inventory/search"): {"status": 200, "data": {"wrong_key": 80}},
+        })
+        m = cc.PRIMITIVES["inventory_enforcement_ratio"](f)
+        self.assertTrue(m["indeterminate"])
+        self.assertEqual(m["value"], None)
+
+    def test_list_endpoint_returning_dict_is_indeterminate(self):
+        # A dict-wrapped list on a 200 must NOT crash and must NOT be read as empty.
+        f = fake_fetch({("GET", "/openapi/v1/applications"):
+                        {"status": 200, "data": {"results": [], "offset": 0}}})
+        m = cc.PRIMITIVES["enforcing_workspaces_ratio"](f)
+        self.assertTrue(m["indeterminate"])
+
     def test_no_mutating_paths(self):
         # Guard: exercising every primitive must never call a mutating endpoint.
         f = fake_fetch({})
@@ -108,6 +125,31 @@ class TestLoadMapping(unittest.TestCase):
     def test_unknown_primitive_raises(self):
         with self.assertRaises(ValueError):
             cc.load_mapping(os.path.join(self.FX, "bad_mapping.json"))
+
+    def _write_tmp(self, obj):
+        import json, tempfile
+        fd, p = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(obj, fh)
+        self.addCleanup(os.remove, p)
+        return p
+
+    def _base(self, controls):
+        return {"framework": {"id": "t", "name": "T", "version": "1", "source": "s",
+                              "retrieved": "2026-05-20", "disclaimer": "d"},
+                "controls": controls}
+
+    def test_unparseable_verdict_rule_raises_at_load(self):
+        p = self._write_tmp(self._base([
+            {"id": "X.1", "evidence": "enforcing_workspaces_ratio",
+             "verdict_rule": {"satisfied": "~0.9", "else": "gap"}}]))
+        with self.assertRaises(ValueError):
+            cc.load_mapping(p)
+
+    def test_non_object_control_raises_clean_error(self):
+        p = self._write_tmp(self._base(["not-a-dict"]))
+        with self.assertRaises(ValueError):
+            cc.load_mapping(p)
 
 
 class TestRunFramework(unittest.TestCase):
@@ -138,6 +180,23 @@ class TestRunFramework(unittest.TestCase):
         gap_row = [r for r in out["rows"] if r["id"] == "A.1"][0]
         self.assertEqual(gap_row["status"], "Gap")
         self.assertTrue(gap_row["pointer"])  # non-empty pointer for a gap
+
+    def test_primitive_exception_degrades_to_indeterminate(self):
+        # A primitive that raises must NOT crash the whole report.
+        mapping = self._mapping()
+        original = cc.PRIMITIVES["enforcing_workspaces_ratio"]
+        def boom(fetch, scope=None):
+            raise RuntimeError("kaboom")
+        cc.PRIMITIVES["enforcing_workspaces_ratio"] = boom
+        try:
+            out = cc.run_framework(mapping, fake_fetch({}))
+        finally:
+            cc.PRIMITIVES["enforcing_workspaces_ratio"] = original
+        row = [r for r in out["rows"] if r["id"] == "A.1"][0]
+        self.assertEqual(row["status"], "Indeterminate")
+        self.assertIn("kaboom", row["reason"])
+        # the other control still rendered — report survived
+        self.assertEqual(sum(out["summary"].values()), 2)
 
 
 class TestResolveMapping(unittest.TestCase):

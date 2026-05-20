@@ -20,18 +20,28 @@ def measurement(value=None, display="", indeterminate=False, reason=None):
     return {"value": value, "display": display, "indeterminate": indeterminate, "reason": reason}
 
 
-def _match(value, cond):
+def _parse_condition(cond):
+    """Parse a verdict condition into (op, threshold). Raises ValueError/TypeError
+    on anything unparseable, so it doubles as a load-time validator."""
     if cond in ("present", "absent"):
-        return value == cond
+        return (cond, None)
+    if not isinstance(cond, str):
+        raise TypeError(f"verdict condition must be a string, got {type(cond).__name__}")
     for op in (">=", "<=", ">", "<", "=="):
         if cond.startswith(op):
-            threshold = float(cond[len(op):])
-            v = float(value)
-            return {
-                ">=": v >= threshold, "<=": v <= threshold,
-                ">": v > threshold, "<": v < threshold, "==": v == threshold,
-            }[op]
+            return (op, float(cond[len(op):]))  # ValueError if not numeric
     raise ValueError(f"Unparseable verdict condition: {cond!r}")
+
+
+def _match(value, cond):
+    op, threshold = _parse_condition(cond)
+    if op in ("present", "absent"):
+        return value == op
+    v = float(value)
+    return {
+        ">=": v >= threshold, "<=": v <= threshold,
+        ">": v > threshold, "<": v < threshold, "==": v == threshold,
+    }[op]
 
 
 def evaluate_verdict(evidence_name, meas, verdict_rule):
@@ -78,6 +88,8 @@ def load_mapping(path):
         raise ValueError(f"{path}: 'controls' must be a non-empty list")
 
     for c in controls:
+        if not isinstance(c, dict):
+            raise ValueError(f"{path}: every control must be an object, got {type(c).__name__}")
         if not c.get("id"):
             raise ValueError(f"{path}: a control is missing 'id'")
         ev = c.get("evidence")
@@ -86,9 +98,25 @@ def load_mapping(path):
                 f"{path}: control {c['id']} references unknown evidence '{ev}'. "
                 f"Known primitives: {sorted(KNOWN_PRIMITIVES)} or 'not_evidenceable'."
             )
-        if ev != "not_evidenceable" and "verdict_rule" not in c:
-            raise ValueError(f"{path}: control {c['id']} missing 'verdict_rule'")
+        if ev != "not_evidenceable":
+            rule = c.get("verdict_rule")
+            if rule is None:
+                raise ValueError(f"{path}: control {c['id']} missing 'verdict_rule'")
+            _validate_verdict_rule(rule, c["id"], path)
     return data
+
+
+def _validate_verdict_rule(rule, cid, path):
+    """Fail at load (not at eval) on a malformed verdict_rule, so the documented
+    'drop in a JSON file, validate by running' workflow gives actionable errors."""
+    if not isinstance(rule, dict):
+        raise ValueError(f"{path}: control {cid} verdict_rule must be an object")
+    for key in ("satisfied", "partial"):
+        if key in rule:
+            try:
+                _parse_condition(rule[key])
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"{path}: control {cid} verdict_rule.{key}: {e}") from e
 
 
 def _indet_if_bad(resp, path):
@@ -107,16 +135,42 @@ def _ratio(numerator, denominator, label):
     return measurement(value=r, display=f"{numerator}/{denominator} {label} ({r:.0%})")
 
 
+def _require_list(resp, path):
+    """For list endpoints. resp has already passed _indet_if_bad (HTTP 200).
+    Returns (list, None) or (None, indeterminate-measurement) if the 200 body
+    is not a list — never coerce an unexpected shape into an empty list."""
+    data = resp.get("data")
+    if not isinstance(data, list):
+        return None, measurement(indeterminate=True,
+                                 reason=f"{path}: 200 but expected a list, got {type(data).__name__}")
+    return data, None
+
+
+def _require_number(resp, key, path):
+    """For count endpoints. Returns (number, None) or (None, indeterminate).
+    A 200 that lacks the key, or whose key is non-numeric, is Indeterminate —
+    NOT silently treated as 0 (which would manufacture a false 0%/Gap)."""
+    data = resp.get("data")
+    if not isinstance(data, dict) or key not in data:
+        return None, measurement(indeterminate=True, reason=f"{path}: 200 but missing '{key}'")
+    val = data[key]
+    if not isinstance(val, (int, float)) or isinstance(val, bool):
+        return None, measurement(indeterminate=True, reason=f"{path}: '{key}' is not numeric")
+    return val, None
+
+
 def enforcing_workspaces_ratio(fetch, scope=None):
     path = "/openapi/v1/applications"
     resp = fetch("GET", path)
     bad = _indet_if_bad(resp, path)
     if bad:
         return bad
-    apps = resp.get("data") or []
+    apps, bad = _require_list(resp, path)
+    if bad:
+        return bad
     if scope:
-        apps = [a for a in apps if scope.lower() in (a.get("name", "").lower())]
-    enforcing = sum(1 for a in apps if a.get("enforcement_enabled"))
+        apps = [a for a in apps if isinstance(a, dict) and scope.lower() in (a.get("name", "").lower())]
+    enforcing = sum(1 for a in apps if isinstance(a, dict) and a.get("enforcement_enabled"))
     return _ratio(enforcing, len(apps), "workspaces enforcing")
 
 
@@ -126,7 +180,9 @@ def inventory_enforcement_ratio(fetch, scope=None):
     bad = _indet_if_bad(cresp, cpath)
     if bad:
         return bad
-    total = (cresp.get("data") or {}).get("count", 0)
+    total, bad = _require_number(cresp, "count", cpath)
+    if bad:
+        return bad
     spath = "/openapi/v1/inventory/search"
     body = {"filter": {"type": "eq", "field": "enforcement_status", "value": "enabled"},
             "dimensions": ["ip"], "limit": 0}
@@ -134,7 +190,9 @@ def inventory_enforcement_ratio(fetch, scope=None):
     bad = _indet_if_bad(sresp, spath)
     if bad:
         return bad
-    enforcing = (sresp.get("data") or {}).get("total_count", 0)
+    enforcing, bad = _require_number(sresp, "total_count", spath)
+    if bad:
+        return bad
     return _ratio(enforcing, total, "workloads enforcing")
 
 
@@ -144,8 +202,11 @@ def agent_coverage(fetch, scope=None):
     bad = _indet_if_bad(resp, path)
     if bad:
         return bad
-    sensors = resp.get("data") or []
-    healthy = sum(1 for s in sensors if (s.get("sensor_status") or "").lower() == "active")
+    sensors, bad = _require_list(resp, path)
+    if bad:
+        return bad
+    healthy = sum(1 for s in sensors
+                  if isinstance(s, dict) and (s.get("sensor_status") or "").lower() == "active")
     return _ratio(healthy, len(sensors), "agents healthy")
 
 
@@ -156,8 +217,10 @@ def flow_visibility_present(fetch, scope=None):
     bad = _indet_if_bad(resp, path)
     if bad:
         return bad
-    results = (resp.get("data") or {}).get("results") or []
-    present = "present" if results else "absent"
+    data = resp.get("data")
+    if not isinstance(data, dict) or "results" not in data:
+        return measurement(indeterminate=True, reason=f"{path}: 200 but missing 'results'")
+    present = "present" if data["results"] else "absent"
     return measurement(value=present, display=f"recent flows observed: {present}")
 
 
@@ -167,29 +230,27 @@ def connector_health(fetch, scope=None):
     bad = _indet_if_bad(resp, path)
     if bad:
         return bad
-    conns = resp.get("data") or []
-    healthy = sum(1 for c in conns if (c.get("status") or "").lower() in ("active", "up", "healthy"))
+    conns, bad = _require_list(resp, path)
+    if bad:
+        return bad
+    healthy = sum(1 for c in conns
+                  if isinstance(c, dict) and (c.get("status") or "").lower() in ("active", "up", "healthy"))
     return _ratio(healthy, len(conns), "connectors healthy")
 
 
 def scope_coverage_ratio(fetch, scope=None):
+    # Coarse v1: presence of any non-root scope tree is the signal; a precise
+    # scoped-inventory ratio is deferred. Returns present/absent to avoid
+    # overstating precision. (No inventory/count call — its result was unused.)
     spath = "/openapi/v1/scopes"
     sresp = fetch("GET", spath)
     bad = _indet_if_bad(sresp, spath)
     if bad:
         return bad
-    scopes = sresp.get("data") or []
-    cpath = "/openapi/v1/inventory/count"
-    cresp = fetch("GET", cpath)
-    bad = _indet_if_bad(cresp, cpath)
+    scopes, bad = _require_list(sresp, spath)
     if bad:
         return bad
-    total = (cresp.get("data") or {}).get("count", 0)
-    # Coarse v1: presence of any non-root scope tree is the signal; a precise
-    # scoped-inventory ratio is deferred. Returns present/absent to avoid
-    # overstating precision.
     present = "present" if len(scopes) > 1 else "absent"
-    _ = total  # reserved for future precise rollup
     return measurement(value=present, display=f"defined scopes: {len(scopes)}")
 
 
@@ -223,7 +284,12 @@ def run_control(control, fetch):
         base["status"] = "Not-evidenceable"
         base["pointer"] = "(manual)"
         return base
-    meas = PRIMITIVES[ev](fetch, scope=control.get("scope_hint"))
+    try:
+        meas = PRIMITIVES[ev](fetch, scope=control.get("scope_hint"))
+    except Exception as e:  # one bad row must never crash the whole report
+        base["status"] = "Indeterminate"
+        base["reason"] = f"primitive error: {e}"
+        return base
     status = evaluate_verdict(ev, meas, control["verdict_rule"])
     base["status"] = status
     base["evidence_display"] = meas.get("display", "")
@@ -258,9 +324,14 @@ def render_markdown(fw, results, cluster_url):
     for r in results["rows"]:
         evidence = r["evidence_display"] or (r["reason"] if r["status"] == "Indeterminate" else "—")
         pointer = r["pointer"] or "—"
-        lines.append(f"| {r['id']} | {r['intent']} | {r['csw_capability']} | "
-                     f"{evidence} | {r['status']} | {pointer} |")
+        cells = [r["id"], r["intent"], r["csw_capability"], evidence, r["status"], pointer]
+        lines.append("| " + " | ".join(_cell(c) for c in cells) + " |")
     return "\n".join(lines)
+
+
+def _cell(text):
+    """Make a value safe for a markdown table cell (escape pipes, flatten newlines)."""
+    return str(text).replace("|", "\\|").replace("\n", " ")
 
 
 MAPPINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -304,7 +375,7 @@ def main(argv=None):
     except MappingNotFound as e:
         print(str(e))
         return 2
-    scope = argv[1] if len(argv) > 1 else None
+    scope = (argv[1].strip() or None) if len(argv) > 1 else None
     mapping = load_mapping(path)
     if scope:  # coarse scope filter applies via scope_hint override on every control
         for c in mapping["controls"]:
