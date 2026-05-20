@@ -1,0 +1,14 @@
+{
+  "framework": {
+    "id": "test-fw-1.0", "name": "Test FW", "version": "1.0",
+    "source": "https://example/test", "retrieved": "2026-05-20",
+    "disclaimer": "CSW evidence status, not a compliance attestation."
+  },
+  "controls": [
+    {"id": "A.1", "intent": "Segment things", "csw_capability": "micro-segmentation",
+     "evidence": "enforcing_workspaces_ratio",
+     "verdict_rule": {"satisfied": ">=0.95", "partial": ">=0.5", "else": "gap"}},
+    {"id": "A.2", "intent": "Governance", "csw_capability": "none",
+     "evidence": "not_evidenceable"}
+  ]
+}

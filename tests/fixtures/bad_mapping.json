@@ -1,0 +1,11 @@
+{
+  "framework": {
+    "id": "bad-1.0", "name": "Bad", "version": "1.0",
+    "source": "x", "retrieved": "2026-05-20", "disclaimer": "x"
+  },
+  "controls": [
+    {"id": "B.1", "intent": "x", "csw_capability": "x",
+     "evidence": "nonexistent_primitive",
+     "verdict_rule": {"satisfied": ">=0.5", "else": "gap"}}
+  ]
+}
