@@ -140,6 +140,27 @@ class TestRunFramework(unittest.TestCase):
         self.assertTrue(gap_row["pointer"])  # non-empty pointer for a gap
 
 
+class TestResolveMapping(unittest.TestCase):
+    def test_resolves_by_id(self):
+        # Depends on Task 7's mapping file.
+        p = cc.resolve_mapping_path("pci-dss-4.0")
+        self.assertTrue(p.endswith("pci-dss-4.0.json"))
+
+    def test_unknown_id_lists_available(self):
+        with self.assertRaises(cc.MappingNotFound):
+            cc.resolve_mapping_path("does-not-exist-xyz")
+
+
+class TestShippedMappings(unittest.TestCase):
+    def test_pci_loads_and_is_valid(self):
+        p = cc.resolve_mapping_path("pci-dss-4.0")
+        m = cc.load_mapping(p)  # raises on any invalid control
+        self.assertEqual(m["framework"]["id"], "pci-dss-4.0")
+        self.assertGreaterEqual(len(m["controls"]), 10)
+        # at least one honest not-evidenceable control
+        self.assertTrue(any(c["evidence"] == "not_evidenceable" for c in m["controls"]))
+
+
 class TestRender(unittest.TestCase):
     def test_render_contains_disclaimer_and_all_buckets(self):
         fw = {"id": "pci", "name": "PCI DSS", "version": "4.0",

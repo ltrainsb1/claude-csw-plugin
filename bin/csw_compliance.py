@@ -261,3 +261,59 @@ def render_markdown(fw, results, cluster_url):
         lines.append(f"| {r['id']} | {r['intent']} | {r['csw_capability']} | "
                      f"{evidence} | {r['status']} | {pointer} |")
     return "\n".join(lines)
+
+
+MAPPINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "skills", "csw-compliance", "mappings")
+
+
+class MappingNotFound(Exception):
+    pass
+
+
+def available_frameworks():
+    if not os.path.isdir(MAPPINGS_DIR):
+        return []
+    return sorted(f[:-5] for f in os.listdir(MAPPINGS_DIR) if f.endswith(".json"))
+
+
+def resolve_mapping_path(arg):
+    if arg.endswith(".json") and os.path.exists(arg):
+        return arg
+    candidate = os.path.join(MAPPINGS_DIR, f"{arg}.json")
+    if os.path.exists(candidate):
+        return candidate
+    raise MappingNotFound(
+        f"Unknown framework '{arg}'. Available: {available_frameworks() or '(none)'}")
+
+
+def build_fetch():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from csw_api import make_request  # lazy: only when hitting a real cluster
+    return lambda method, path, body=None: make_request(method, path, body=body)
+
+
+def main(argv=None):
+    argv = argv if argv is not None else sys.argv[1:]
+    if not argv:
+        print("Usage: csw_compliance.py <framework-id|path.json> [scope]")
+        print(f"Available frameworks: {available_frameworks() or '(none)'}")
+        return 2
+    try:
+        path = resolve_mapping_path(argv[0])
+    except MappingNotFound as e:
+        print(str(e))
+        return 2
+    scope = argv[1] if len(argv) > 1 else None
+    mapping = load_mapping(path)
+    if scope:  # coarse scope filter applies via scope_hint override on every control
+        for c in mapping["controls"]:
+            c.setdefault("scope_hint", scope)
+    cluster_url = os.environ.get("CSW_API_URL", "<cluster>")
+    results = run_framework(mapping, build_fetch())
+    print(render_markdown(mapping["framework"], results, cluster_url))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
