@@ -239,3 +239,25 @@ def run_framework(mapping, fetch):
     for r in rows:
         summary[r["status"]] = summary.get(r["status"], 0) + 1
     return {"summary": summary, "rows": rows}
+
+
+def render_markdown(fw, results, cluster_url):
+    s = results["summary"]
+    lines = []
+    lines.append(f"COMPLIANCE EVIDENCE — {fw['name']} v{fw['version']} — {cluster_url}")
+    lines.append(f"Source: {fw['source']} (retrieved {fw['retrieved']})")
+    lines.append(f"⚠ {fw['disclaimer']} Process/people controls are out of scope "
+                 f"and shown as \"Not-evidenceable\".")
+    lines.append("")
+    lines.append("Controls evaluated: {total} | Satisfied: {Satisfied} | Partial: {Partial} | "
+                 "Gap: {Gap} | Not-evidenceable: {Not-evidenceable} | Indeterminate: {Indeterminate}".format(
+                     total=sum(s.values()), **s))
+    lines.append("")
+    lines.append("| Control | Intent | CSW capability | Live evidence | Status | Pointer |")
+    lines.append("|---------|--------|----------------|---------------|--------|---------|")
+    for r in results["rows"]:
+        evidence = r["evidence_display"] or (r["reason"] if r["status"] == "Indeterminate" else "—")
+        pointer = r["pointer"] or "—"
+        lines.append(f"| {r['id']} | {r['intent']} | {r['csw_capability']} | "
+                     f"{evidence} | {r['status']} | {pointer} |")
+    return "\n".join(lines)

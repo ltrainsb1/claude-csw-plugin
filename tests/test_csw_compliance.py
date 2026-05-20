@@ -140,5 +140,26 @@ class TestRunFramework(unittest.TestCase):
         self.assertTrue(gap_row["pointer"])  # non-empty pointer for a gap
 
 
+class TestRender(unittest.TestCase):
+    def test_render_contains_disclaimer_and_all_buckets(self):
+        fw = {"id": "pci", "name": "PCI DSS", "version": "4.0",
+              "source": "https://example/pci", "retrieved": "2026-05-20",
+              "disclaimer": "CSW evidence status, not a compliance attestation."}
+        results = {"summary": {"Satisfied": 1, "Partial": 0, "Gap": 1,
+                               "Not-evidenceable": 1, "Indeterminate": 0},
+                   "rows": [
+                       {"id": "1.2.1", "intent": "seg", "csw_capability": "micro-seg",
+                        "evidence_display": "1/1 (100%)", "status": "Satisfied", "pointer": "", "reason": ""},
+                       {"id": "12.1", "intent": "gov", "csw_capability": "none",
+                        "evidence_display": "", "status": "Not-evidenceable", "pointer": "(manual)", "reason": ""},
+                   ]}
+        md = cc.render_markdown(fw, results, "https://csw.example.com")
+        self.assertIn("not a compliance attestation", md)
+        self.assertIn("PCI DSS v4.0", md)
+        for bucket in cc.ALL_STATUSES:
+            self.assertIn(bucket, md)
+        self.assertIn("12.1", md)  # not-evidenceable row is shown
+
+
 if __name__ == "__main__":
     unittest.main()
