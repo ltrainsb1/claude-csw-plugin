@@ -44,6 +44,29 @@ def _get_deployment_env():
     return raw
 
 
+# Per-endpoint deployment applicability.
+# Only endpoints that are NOT available on both deployments need a row.
+# Anything not listed here is treated as "available on both" (permissive default).
+# Matrix mirrors the Deploy column in skills/csw/api-reference.md;
+# the two must be hand-synced (see ai_docs/docs/csw-deployment-models.md).
+ENDPOINT_MATRIX = [
+    ("GET",  "/openapi/v1/service_health",                  frozenset({"selfhosted"})),
+    ("POST", "/openapi/v1/connector/rotate_certificates",   frozenset({"saas"})),
+]
+
+
+def _match_endpoint(method, path):
+    """Find the matrix row for (method, path) or None.
+    Strips query strings; exact path match against the rows."""
+    if "?" in path:
+        path = path.split("?", 1)[0]
+    for row in ENDPOINT_MATRIX:
+        m, p, _ = row
+        if m == method.upper() and p == path:
+            return row
+    return None
+
+
 def get_config():
     url = os.environ.get("CSW_API_URL", "").rstrip("/")
     key = os.environ.get("CSW_API_KEY", "")

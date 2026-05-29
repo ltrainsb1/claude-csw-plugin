@@ -50,5 +50,41 @@ class TestDeploymentEnv(unittest.TestCase):
         )
 
 
+class TestEndpointMatrix(unittest.TestCase):
+    def test_matrix_is_a_list_of_rows(self):
+        self.assertIsInstance(csw_api.ENDPOINT_MATRIX, list)
+        self.assertTrue(len(csw_api.ENDPOINT_MATRIX) >= 2)
+        for row in csw_api.ENDPOINT_MATRIX:
+            self.assertEqual(len(row), 3)
+            method, path_glob, deploys = row
+            self.assertIn(method, {"GET", "POST", "PUT", "DELETE"})
+            self.assertIsInstance(path_glob, str)
+            self.assertIsInstance(deploys, frozenset)
+            self.assertTrue(deploys.issubset({"saas", "selfhosted"}))
+
+    def test_service_health_is_selfhosted_only(self):
+        row = csw_api._match_endpoint("GET", "/openapi/v1/service_health")
+        self.assertIsNotNone(row)
+        _, _, deploys = row
+        self.assertEqual(deploys, frozenset({"selfhosted"}))
+
+    def test_rotate_certificates_is_saas_only(self):
+        row = csw_api._match_endpoint("POST", "/openapi/v1/connector/rotate_certificates")
+        self.assertIsNotNone(row)
+        _, _, deploys = row
+        self.assertEqual(deploys, frozenset({"saas"}))
+
+    def test_unmatched_path_returns_none(self):
+        self.assertIsNone(csw_api._match_endpoint("GET", "/openapi/v1/applications"))
+
+    def test_method_mismatch_does_not_match(self):
+        # service_health row is GET only; POST should not match it
+        self.assertIsNone(csw_api._match_endpoint("POST", "/openapi/v1/service_health"))
+
+    def test_query_string_is_ignored(self):
+        row = csw_api._match_endpoint("GET", "/openapi/v1/service_health?verbose=true")
+        self.assertIsNotNone(row)
+
+
 if __name__ == "__main__":
     unittest.main()
