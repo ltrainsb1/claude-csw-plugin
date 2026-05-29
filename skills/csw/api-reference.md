@@ -3,6 +3,8 @@
 Base path: `/openapi/v1`
 
 > **Deploy column.** Every table below carries a `Deploy` column: `B` (both deployments), `S` (SaaS tenants only), `H` (self-hosted clusters only). The helper `bin/csw_api.py` enforces this column at call time — calls to non-applicable endpoints are refused before signing. Set `CSW_DEPLOYMENT=saas|selfhosted` to skip auto-detection. See `ai_docs/docs/csw-deployment-models.md`.
+>
+> **API surface variants — read this if a path 404/405/400s on self-hosted.** The paths and verbs in this document are **SaaS-canonical**. Older on-prem Tetration releases (4.0.x and earlier) may use renamed paths, different HTTP verbs, or stricter body validation. Affected sections carry an inline "**On-prem 4.0.x:**" callout. The full catalog and discovery recipe live in `skills/csw/SKILL.md` under "API surface variants (Tetration version drift)". When you discover a new drift during a workflow, append it to both the catalog and the affected section here.
 
 ## Scopes
 
@@ -98,6 +100,8 @@ Nested example:
 | POST | `/inventory/stats` | Inventory statistics | B |
 | GET | `/inventory/count` | Total inventory count | B |
 
+> **On-prem 4.0.x:** `/inventory/dimensions` uses `GET` (no body), not `POST`. If `POST` returns 405, retry as `GET`. See "API surface variants" in `SKILL.md`.
+
 **Search body**:
 ```json
 {
@@ -155,6 +159,12 @@ Nested example:
 | POST | `/flow_search/topn` | Top-N flows | B |
 | POST | `/flow_search/dimensions` | Available dimensions | B |
 | POST | `/flow_search/metrics` | Available metrics | B |
+
+> **On-prem 4.0.x — verified against Tetration 4.0.3:**
+> - Path namespace is `/openapi/v1/flowsearch` (no underscore). The canonical `/flow_search/flows` 404s on these clusters.
+> - Verb mapping: `POST /openapi/v1/flowsearch` (search), `POST /openapi/v1/flowsearch/topn` (top-N), `GET /openapi/v1/flowsearch/dimensions` (note GET, not POST), `GET /openapi/v1/flowsearch/metrics`.
+> - Request body MUST include `"scopeName": "<root-scope-name>"` — the cluster will not infer a tenant. Common values: `"Default"`, `"Tetration"` (the cluster's own management scope, where you'll find internal cluster-services traffic), or a customer-named root scope. Returns `400 "scopeName is a required field"` if missing.
+> - On the `aggregated_flows` datasource, the `fwd_*` / `rev_*` metric fields may return zero; the live volumetric metric is `bandwidth_bytes_per_second` (no direction prefix). Request it explicitly if `fwd_byte_count` / `rev_byte_count` come back empty.
 
 **Flow search body**:
 ```json
