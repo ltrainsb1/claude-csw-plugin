@@ -132,6 +132,49 @@ def resolve_deployment(base_url, api_key, api_secret, verify_ssl):
         return "unknown"
 
 
+def _cache_path(url):
+    """Resolve the cache file path for a given CSW_API_URL.
+    Prefers $CLAUDE_PLUGIN_ROOT; falls back to ~/.cache/csw_api/."""
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if not root:
+        root = os.path.join(os.path.expanduser("~"), ".cache", "csw_api")
+    return os.path.join(root, f".csw_deployment_cache_{key}")
+
+
+def _read_cache(url):
+    """Return the cached deployment for `url`, or None.
+    Treats corrupt/foreign content (including legacy 'unknown' or 'auto')
+    as a cache miss."""
+    try:
+        with open(_cache_path(url), "r") as f:
+            value = f.read().strip()
+    except OSError:
+        return None
+    if value in {"saas", "selfhosted"}:
+        return value
+    return None
+
+
+def _write_cache(url, value):
+    """Persist `value` for `url`. Returns True on success, False on failure.
+    Only 'saas' and 'selfhosted' are cacheable — 'auto' is the unresolved
+    state, and 'unknown' is a probe failure we want to re-trigger on every
+    call (pre-flight WARN #1). Never raises."""
+    if value not in {"saas", "selfhosted"}:
+        return False
+    path = _cache_path(url)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(value)
+        return True
+    except OSError as e:
+        print(f"[csw_api] could not write deployment cache to {path}: {e}",
+              file=sys.stderr)
+        return False
+
+
 def get_config():
     url = os.environ.get("CSW_API_URL", "").rstrip("/")
     key = os.environ.get("CSW_API_KEY", "")

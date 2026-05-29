@@ -254,5 +254,61 @@ class TestResolveDeployment(unittest.TestCase):
         )
 
 
+class TestDeploymentCache(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.mkdtemp(prefix="csw_cache_test_")
+        os.environ["CLAUDE_PLUGIN_ROOT"] = self._tmp
+
+    def tearDown(self):
+        import shutil
+        os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_read_returns_none_when_no_cache(self):
+        self.assertIsNone(csw_api._read_cache("https://x.example.com"))
+
+    def test_roundtrip_saas(self):
+        ok = csw_api._write_cache("https://x.example.com", "saas")
+        self.assertTrue(ok)
+        self.assertEqual(csw_api._read_cache("https://x.example.com"), "saas")
+
+    def test_roundtrip_selfhosted(self):
+        csw_api._write_cache("https://x.example.com", "selfhosted")
+        self.assertEqual(csw_api._read_cache("https://x.example.com"), "selfhosted")
+
+    def test_different_urls_different_cache(self):
+        csw_api._write_cache("https://a.example.com", "saas")
+        csw_api._write_cache("https://b.example.com", "selfhosted")
+        self.assertEqual(csw_api._read_cache("https://a.example.com"), "saas")
+        self.assertEqual(csw_api._read_cache("https://b.example.com"), "selfhosted")
+
+    def test_refuses_to_cache_auto(self):
+        # auto should never end up cached; it's the unresolved state.
+        ok = csw_api._write_cache("https://x.example.com", "auto")
+        self.assertFalse(ok)
+        self.assertIsNone(csw_api._read_cache("https://x.example.com"))
+
+    def test_refuses_to_cache_unknown(self):
+        # unknown is a probe failure — letting it re-trigger on every call
+        # keeps the gate honest if the cluster comes back online.
+        ok = csw_api._write_cache("https://x.example.com", "unknown")
+        self.assertFalse(ok)
+        self.assertIsNone(csw_api._read_cache("https://x.example.com"))
+
+    def test_unwritable_dir_returns_false_not_raises(self):
+        os.environ["CLAUDE_PLUGIN_ROOT"] = "/nonexistent/definitely/not/writable"
+        ok = csw_api._write_cache("https://x.example.com", "saas")
+        self.assertFalse(ok)
+
+    def test_corrupt_cache_treated_as_none(self):
+        import hashlib
+        key = hashlib.sha256(b"https://x.example.com").hexdigest()[:12]
+        cache_path = os.path.join(self._tmp, f".csw_deployment_cache_{key}")
+        with open(cache_path, "w") as f:
+            f.write("garbage")
+        self.assertIsNone(csw_api._read_cache("https://x.example.com"))
+
+
 if __name__ == "__main__":
     unittest.main()
