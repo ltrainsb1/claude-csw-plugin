@@ -24,10 +24,17 @@ Add to your Claude Code settings (`~/.claude/settings.json` or project `.claude/
 Set the following environment variables:
 
 ```bash
+# SaaS tenant:         https://<tenant>.tetrationcloud.com
+# Self-hosted cluster: https://<your-cluster-fqdn>
 export CSW_API_URL="https://your-cluster.tetrationcloud.com"
 export CSW_API_KEY="your-api-key"
 export CSW_API_SECRET="your-api-secret"
+
+# Optional: skip auto-detection if you know the deployment type
+# export CSW_DEPLOYMENT=saas       # or: selfhosted
 ```
+
+`CSW_API_URL` is either a SaaS tenant (`.tetrationcloud.com`) or your self-hosted cluster's private FQDN. `CSW_DEPLOYMENT` accepts `saas | selfhosted | auto` (default `auto` probes `/openapi/v1/vrfs` once and caches the result).
 
 Or configure via Claude Code settings (`~/.claude/settings.local.json`):
 
@@ -36,14 +43,15 @@ Or configure via Claude Code settings (`~/.claude/settings.local.json`):
   "env": {
     "CSW_API_URL": "https://your-cluster.tetrationcloud.com",
     "CSW_API_KEY": "your-api-key",
-    "CSW_API_SECRET": "your-api-secret"
+    "CSW_API_SECRET": "your-api-secret",
+    "CSW_DEPLOYMENT": "auto"
   }
 }
 ```
 
-### SSL Verification
+### SSL Verification (self-hosted)
 
-For clusters with self-signed certificates, set:
+Self-hosted clusters often use private-CA or self-signed certs. SaaS tenants are signed by a public CA, and `CSW_VERIFY_SSL=false` is almost never appropriate for SaaS. For self-hosted clusters with self-signed certificates, set:
 
 ```bash
 export CSW_VERIFY_SSL=false
