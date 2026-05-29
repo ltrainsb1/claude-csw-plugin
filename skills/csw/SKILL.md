@@ -23,6 +23,8 @@ If any are missing, prompt the user to set them. Check with:
 echo "URL: ${CSW_API_URL:-NOT SET}" && echo "KEY: ${CSW_API_KEY:+SET}" && echo "SECRET: ${CSW_API_SECRET:+SET}"
 ```
 
+**Deployment models.** This skill works against both Cisco-hosted SaaS tenants and customer-managed self-hosted clusters. Auto-detection runs on first call (probe of `/openapi/v1/vrfs`); set `CSW_DEPLOYMENT=saas` or `CSW_DEPLOYMENT=selfhosted` to skip the probe. A handful of endpoints are SaaS-only or self-hosted-only — see the `Deploy` column in `api-reference.md`; the helper refuses calls to endpoints that don't apply to the resolved deployment and returns a structured "not applicable" error.
+
 ## Authentication
 
 CSW uses **HMAC digest authentication**. All API calls must be made using the helper script at `${CLAUDE_PLUGIN_ROOT}/bin/csw_api.py`. This script handles authentication automatically.
@@ -206,8 +208,8 @@ Generate a comprehensive report of the CSW environment:
 4. **Connectors**: `GET /openapi/v1/connectors` — list all connectors with type and status
 5. **Orchestrators**: `GET /openapi/v1/orchestrators` — list all orchestrators (Kubernetes, F5, etc.)
 6. **Applications/Workspaces**: `GET /openapi/v1/applications` — list all policy workspaces with enforcement state
-7. **Service Health**: `GET /openapi/v1/service_health` — cluster health status
-8. **VRFs**: `GET /openapi/v1/vrfs` — list VRFs/tenants
+7. **Service Health**: `GET /openapi/v1/service_health` — **self-hosted only.** On SaaS tenants, skip this step and add a one-line note to the report: "Service health is Cisco's responsibility on SaaS tenants; not reported."
+8. **VRFs**: `GET /openapi/v1/vrfs` — **self-hosted only.** On SaaS tenants, omit the VRF section (the tenant lives in one VRF and the listing is uninteresting).
 
 Present the report in a well-formatted table structure.
 
@@ -336,7 +338,7 @@ After any workflow phase, end with **one** concrete recommended next step (not a
 **Read-only discovery:**
 1. List agents. `GET /openapi/v1/sensors`. Page through if >500.
 2. Group by `current_sw_version`, `platform`, `agent_type`. Show counts per group.
-3. List target versions. `GET /openapi/v1/software/versions`.
+3. List target versions. `GET /openapi/v1/software/versions`. **Catalog content depends on the deployment:** SaaS shows the Cisco-curated versions for this tenant's release train; self-hosted shows whatever the cluster admin has uploaded. Recommendations key off whatever the call returns; flag in the report if the latest version is unexpectedly old.
 4. Highlight risk groups: `last_config_fetch_at` >7 days old (likely offline), agents on EOL versions, enforcing agents on stale versions.
 
 **Recommended next step:**
@@ -366,12 +368,12 @@ After any workflow phase, end with **one** concrete recommended next step (not a
 **Read-only discovery:**
 1. Connector status. `GET /openapi/v1/connectors` → find the failing one. Capture type, last successful sync, and error message.
 2. Orchestrator status. `GET /openapi/v1/orchestrators/{id}` if connector is orchestrator-backed.
-3. Secure Connector tunnel. `GET /openapi/v1/connector/status` if appliance-tunneled.
+3. Secure Connector tunnel. `GET /openapi/v1/connector/status` if appliance-tunneled. **On self-hosted clusters Secure Connector is uncommon; if the call returns "not configured" or the deployment is self-hosted, skip the tunnel branch and proceed with the direct-connectivity categorization.**
 4. Recent change log on the connector. `GET /openapi/v1/change_logs` filtered to the connector id.
 5. Categorize root cause: **auth** (cert/token expired), **network** (tunnel/firewall), **config drift** (target endpoint moved), or **upstream** (K8s API / F5 / vCenter is itself down).
 
 **Recommended next step (pick one):**
-- Auth (cert) → **rotate certs** via `POST /connector/rotate_certificates`. → **HIGH gate** (briefly disrupts tunnel).
+- Auth (cert) → **rotate certs** via `POST /openapi/v1/connector/rotate_certificates`. → **HIGH gate** (briefly disrupts tunnel). **Available on SaaS deployments only**; self-hosted certificate rotation goes through the cluster's site-admin UI.
 - Auth (token) → no API path; recommend the user reissue the token in the UI.
 - Config drift → **edit orchestrator config** via `PUT /orchestrators/{id}`. → **LOW gate.**
 - Network → no API call. Recommend the user check the appliance, firewall, or proxy.
@@ -510,7 +512,8 @@ If any affected workspace has `enforcement_enabled=false`, append this line unde
 ## Error Handling
 
 - If the API returns 401/403: tell the user their API key may lack the required capability
-- If the API returns 404: the resource doesn't exist, suggest alternatives
+- If the API returns 404: either the resource doesn't exist OR (less common) the endpoint is not exposed on this deployment type. Cross-reference the `Deploy` column in `api-reference.md`. If the endpoint is marked SaaS-only on a self-hosted cluster (or vice versa), the helper should have refused the call before sending — surface the helper's "not applicable" error verbatim and recommend the user verify `CSW_DEPLOYMENT`.
+- If the helper returns `error: "endpoint <path> not applicable on <deployment> deployment"`: this is the applicability gate firing. Either the deployment was misdetected (recommend `CSW_DEPLOYMENT=<other>` and retry) or the workflow is wrong to call that endpoint on this deployment.
 - If the API returns 500: CSW cluster issue, suggest checking service health
 - If connection fails: verify `CSW_API_URL` is correct and reachable
 - Always show the HTTP status code and error message from CSW
@@ -520,6 +523,8 @@ If any affected workspace has `enforcement_enabled=false`, append this line unde
 CSW API keys are issued with specific capabilities, and most capabilities can be granted as read-only or read+write. **Workflows that perform writes need a key with the write tier of the relevant capability** — discovery will succeed on a read-only key, then the gated write call returns 403. Before starting a write workflow, confirm the user's key has the right tier (or be ready to surface the 403 cleanly).
 
 Inform the user if their key needs additional permissions.
+
+Capabilities are identical between SaaS and self-hosted. The `Deploy` column in `api-reference.md` is orthogonal — it says which endpoints exist on which deployment, not which capability is required.
 
 ### Read-only commands
 
