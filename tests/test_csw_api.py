@@ -11,6 +11,14 @@ class TestSmoke(unittest.TestCase):
         self.assertTrue(hasattr(csw_api, "make_request"))
 
 
+class TestDocsMentionDeployment(unittest.TestCase):
+    def test_module_docstring_mentions_csw_deployment(self):
+        self.assertIn("CSW_DEPLOYMENT", csw_api.__doc__ or "")
+
+    def test_module_docstring_mentions_get_deployment_flag(self):
+        self.assertIn("--get-deployment", csw_api.__doc__ or "")
+
+
 class TestDeploymentEnv(unittest.TestCase):
     def setUp(self):
         self._saved = os.environ.pop("CSW_DEPLOYMENT", None)

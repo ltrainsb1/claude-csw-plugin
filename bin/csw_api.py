@@ -6,6 +6,7 @@ Usage:
     python3 csw_api.py GET /openapi/v1/scopes
     python3 csw_api.py POST /openapi/v1/inventory/search '{"filter": {...}}'
     python3 csw_api.py GET /openapi/v1/sensors --limit 100 --offset 0
+    python3 csw_api.py --get-deployment
 
 Environment variables required:
     CSW_API_URL    - Base URL (e.g., https://csw.example.com)
@@ -14,6 +15,10 @@ Environment variables required:
 
 Optional:
     CSW_VERIFY_SSL - Set to "false" to disable SSL verification (default: true)
+    CSW_DEPLOYMENT - One of: saas, selfhosted, auto, unknown (default: auto).
+                     Controls the deployment-applicability gate. 'auto' probes
+                     /openapi/v1/vrfs on first call and caches the result under
+                     $CLAUDE_PLUGIN_ROOT/.csw_deployment_cache_<hash>.
 """
 
 import base64
