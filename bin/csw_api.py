@@ -89,10 +89,9 @@ PATH_ALIASES = [
     # (canonical_method, canonical_path, alt_method, alt_path)
     ("POST", "/openapi/v1/flow_search/flows",      "POST", "/openapi/v1/flowsearch"),
     ("POST", "/openapi/v1/flow_search/topn",       "POST", "/openapi/v1/flowsearch/topn"),
-    # metrics row: alt verb (GET) inferred from sibling endpoints during PR #5
-    # diagnostic. Documented in skills/csw/api-reference.md on-prem callout
-    # but NOT directly tested on a 4.0.x cluster — verify when cluster access
-    # permits. If wrong, helper will rewrite + 405 (recoverable).
+    # metrics row: alt verb (GET) was inferred during PR #5 from sibling
+    # endpoints; live-verified against tet-pov-rtp1.cpoc.co during PR #6
+    # post-flight 2c (HTTP 200 + 59-item metrics list).
     ("POST", "/openapi/v1/flow_search/metrics",    "GET",  "/openapi/v1/flowsearch/metrics"),
     ("POST", "/openapi/v1/flow_search/dimensions", "GET",  "/openapi/v1/flowsearch/dimensions"),
     ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
