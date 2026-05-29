@@ -25,6 +25,30 @@ echo "URL: ${CSW_API_URL:-NOT SET}" && echo "KEY: ${CSW_API_KEY:+SET}" && echo "
 
 **Deployment models.** This skill works against both Cisco-hosted SaaS tenants and customer-managed self-hosted clusters. Auto-detection runs on first call (probe of `/openapi/v1/vrfs`); set `CSW_DEPLOYMENT=saas` or `CSW_DEPLOYMENT=selfhosted` to skip the probe. A handful of endpoints are SaaS-only or self-hosted-only — see the `Deploy` column in `api-reference.md`; the helper refuses calls to endpoints that don't apply to the resolved deployment and returns a structured "not applicable" error.
 
+**API surface variants (Tetration version drift).** The `Deploy` column says whether an endpoint *exists* on a deployment. It does NOT say whether the endpoint's **path spelling, HTTP verb, or required body fields** are the same. Older on-prem Tetration releases (4.0.x and earlier, common on POV / customer-managed clusters) frequently use older path spellings and stricter body validation than the SaaS-current spec documented in `api-reference.md`. Treat `api-reference.md` as **SaaS-canonical**; if you get a `404`, `405`, or `400` from a self-hosted cluster on a path that should exist, the cluster is probably running an older variant — fall through to the discovery recipe below.
+
+### Known drifts (catalog — extend as new ones are found)
+
+| Canonical path / verb (SaaS, current spec) | On-prem alt (Tetration 4.0.x) | How it surfaces |
+|---|---|---|
+| `POST /openapi/v1/flow_search/flows` | `POST /openapi/v1/flowsearch` (no underscore, no `/flows` suffix) | 404 on canonical |
+| `POST /openapi/v1/flow_search/topn` | `POST /openapi/v1/flowsearch/topn` | 404 on canonical |
+| `POST /openapi/v1/flow_search/dimensions` | `GET /openapi/v1/flowsearch/dimensions` | 405 on canonical (verb wrong) |
+| `POST /openapi/v1/inventory/dimensions` | `GET /openapi/v1/inventory/dimensions` | 405 on canonical (verb wrong) |
+| Body: implicit single tenant on SaaS | Body: `"scopeName": "<root-scope-name>"` **required** on `flowsearch` | 400 with `"scopeName is a required field"` |
+| Metric fields `fwd_byte_count` / `rev_byte_count` etc. | `aggregated_flows` datasource on 4.0.x may return zero for those; the live metric is `bandwidth_bytes_per_second` (no fwd/rev) | metrics returned as zero |
+
+### Discovery recipe — when canonical path 404/405/400s on self-hosted
+
+1. **Try the canonical path/verb first** (what `api-reference.md` documents).
+2. **404** → likely renamed. Strip underscores from the leaf segment (`flow_search/flows` → `flowsearch`); drop redundant trailing segments. Add the alt to the catalog above when confirmed.
+3. **405** → method changed. Try the other HTTP verb (GET ↔ POST). Add to the catalog.
+4. **400 with a body-validation error** → read the error message verbatim — Tetration returns the specific missing field name (e.g., `scopeName`, `tenant_id`, `vrf_id`). Add it and retry. Add to the catalog.
+5. **Surface the drift to the operator** in the workflow's report. Do NOT silently route around it as if everything is normal — the operator needs to know the cluster is on an older API surface so they can interpret future errors.
+6. **`scopeName` specifically:** on self-hosted multi-tenant clusters, the operator owns the choice of which root scope to query. If the user hasn't specified one and the deployment is self-hosted, **ask** — do not guess. Common root-scope names: `"Default"`, `"Tetration"` (the cluster's own management tenant), or a customer-named root.
+
+This catalog is hand-maintained — when you discover a new drift during a workflow, append it here in the same PR.
+
 ## Authentication
 
 CSW uses **HMAC digest authentication**. All API calls must be made using the helper script at `${CLAUDE_PLUGIN_ROOT}/bin/csw_api.py`. This script handles authentication automatically.
@@ -253,15 +277,15 @@ Search and report on workloads:
 1. `POST /openapi/v1/inventory/search` with filter based on user query
 2. Show: IP, hostname, OS, agent version, labels, scope membership, enforcement state
 3. Common filters: by IP, hostname, OS, label, scope
-4. `POST /openapi/v1/inventory/dimensions` — show available search dimensions
+4. `POST /openapi/v1/inventory/dimensions` — show available search dimensions. **On self-hosted Tetration 4.0.x this endpoint uses `GET` instead of `POST` and takes no body** — see API Surface Variants catalog. If `POST` returns 405, retry as `GET`.
 
 ### `/csw flows [src] [dst] [port]` — Flow Search
 Search observed flows:
 
-1. `POST /openapi/v1/flow_search/flows` with time range and filters
-2. Show: src/dst IP, port, protocol, action (allowed/denied), policy match, byte/packet counts
-3. Default to last 1 hour if no time range specified
-4. `POST /openapi/v1/flow_search/topn` for top talkers
+1. `POST /openapi/v1/flow_search/flows` with time range and filters. **On self-hosted Tetration 4.0.x clusters this path is `POST /openapi/v1/flowsearch` (no underscore, no `/flows` suffix) AND the request body MUST include `"scopeName": "<root-scope-name>"` — see the API Surface Variants catalog above.** If the canonical path 404s, retry with the alt and a `scopeName` chosen by the operator (ask if not specified — common values are `Default` or `Tetration`).
+2. Show: src/dst IP, port, protocol, action (allowed/denied), policy match, byte/packet counts. On self-hosted's `aggregated_flows` datasource, the `fwd_*` / `rev_*` metric fields may return zero; the live metric is `bandwidth_bytes_per_second` — request that one if the canonical metrics come back empty.
+3. Default to last 1 hour if no time range specified.
+4. `POST /openapi/v1/flow_search/topn` for top talkers. **Same alt-path rule on self-hosted: `POST /openapi/v1/flowsearch/topn`.**
 
 ### `/csw agents [hostname or IP]` — Agent/Sensor Report
 Report on deployed agents:
@@ -304,7 +328,7 @@ After any workflow phase, end with **one** concrete recommended next step (not a
 **Triggers:** "why is X being denied", "investigate flow", "policy gap", "missing rule", "what policy matched".
 
 **Read-only discovery:**
-1. Search the flow. `POST /openapi/v1/flow_search/flows` over the relevant time window with `src_address`, `dst_address`, `dst_port`, `proto`. Confirm the flow exists; capture `action`, `fwd_policy_id`, byte/packet counts.
+1. Search the flow. `POST /openapi/v1/flow_search/flows` over the relevant time window with `src_address`, `dst_address`, `dst_port`, `proto`. Confirm the flow exists; capture `action`, `fwd_policy_id`, byte/packet counts. **On self-hosted Tetration 4.0.x, the path is `/openapi/v1/flowsearch` and `scopeName` is a required body field — see the API Surface Variants catalog at the top of this skill.**
 2. Quick analyze. `POST /openapi/v1/policies/{rootScopeID}/quick_analysis` with `{src_ip, dst_ip, dst_port, protocol}`. Returns matched policy chain or "no match → catch-all".
 3. Inspect matched policy (or its absence). `GET /openapi/v1/policies/{matched_id}` — show consumer/provider filters, action, priority.
 4. Map policy → workspace → scope so the user knows where any change must be made.
@@ -401,7 +425,7 @@ After any workflow phase, end with **one** concrete recommended next step (not a
    - Mixed paste (one internal IP + one external IP) → run both branches and merge.
 
 3. **Discover** with adaptive time window: 1h → 24h → 7d, stop at the first window with ≥1 hit. Cold (no hits at 7d) → skip the option-builder, return a "cold indicator" report.
-   - **Outside-in:** `POST /openapi/v1/flow_search/flows` filtered by `src_address OR dst_address = <ext_ip>`. Capture internal endpoints touching, ports, byte/packet counts, action (allowed vs. denied). For each touching endpoint: `POST /openapi/v1/inventory/search` to get hostname/scope/labels. **IOC fan-out check (RED finding):** also run `POST /openapi/v1/flow_search/topn` with `dimension: src_address`, `filter: dst_address = <ext_ip>` to detect other hosts beaconing to the same external IP. Surface every host that hit the indicator, not just the one named in the alert.
+   - **Outside-in:** `POST /openapi/v1/flow_search/flows` filtered by `src_address OR dst_address = <ext_ip>`. Capture internal endpoints touching, ports, byte/packet counts, action (allowed vs. denied). For each touching endpoint: `POST /openapi/v1/inventory/search` to get hostname/scope/labels. **IOC fan-out check (RED finding):** also run `POST /openapi/v1/flow_search/topn` with `dimension: src_address`, `filter: dst_address = <ext_ip>` to detect other hosts beaconing to the same external IP. Surface every host that hit the indicator, not just the one named in the alert. **All three flow_search calls are subject to API surface variants on self-hosted (path `/openapi/v1/flowsearch`, `scopeName` body field required) — see the catalog at the top of this skill.**
    - **Inside-out:** `POST /openapi/v1/flow_search/flows` filtered by `src OR dst = <int_ip>`. Tabulate top peers, top ports, cross-scope hops. For any suspicious peer-flow: `POST /openapi/v1/policies/{rootScopeID}/quick_analysis` to see which policy matched.
    - Skip lateral peer-of-peer scans by default. Offer as drill-down only.
 
