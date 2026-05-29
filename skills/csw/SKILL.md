@@ -34,6 +34,7 @@ echo "URL: ${CSW_API_URL:-NOT SET}" && echo "KEY: ${CSW_API_KEY:+SET}" && echo "
 | `POST /openapi/v1/flow_search/flows` | `POST /openapi/v1/flowsearch` (no underscore, no `/flows` suffix) | 404 on canonical |
 | `POST /openapi/v1/flow_search/topn` | `POST /openapi/v1/flowsearch/topn` | 404 on canonical |
 | `POST /openapi/v1/flow_search/dimensions` | `GET /openapi/v1/flowsearch/dimensions` | 405 on canonical (verb wrong) |
+| `POST /openapi/v1/flow_search/metrics` | `GET /openapi/v1/flowsearch/metrics` | 405 on canonical (verb wrong; documented in api-reference.md on-prem callout) |
 | `POST /openapi/v1/inventory/dimensions` | `GET /openapi/v1/inventory/dimensions` | 405 on canonical (verb wrong) |
 | Body: implicit single tenant on SaaS | Body: `"scopeName": "<root-scope-name>"` **required** on `flowsearch` | 400 with `"scopeName is a required field"` |
 | Metric fields `fwd_byte_count` / `rev_byte_count` etc. | `aggregated_flows` datasource on 4.0.x may return zero for those; the live metric is `bandwidth_bytes_per_second` (no fwd/rev) | metrics returned as zero |
@@ -47,7 +48,7 @@ echo "URL: ${CSW_API_URL:-NOT SET}" && echo "KEY: ${CSW_API_KEY:+SET}" && echo "
 5. **Surface the drift to the operator** in the workflow's report. Do NOT silently route around it as if everything is normal — the operator needs to know the cluster is on an older API surface so they can interpret future errors.
 6. **`scopeName` specifically:** on self-hosted multi-tenant clusters, the operator owns the choice of which root scope to query. If the user hasn't specified one and the deployment is self-hosted, **ask** — do not guess. Common root-scope names: `"Default"`, `"Tetration"` (the cluster's own management tenant), or a customer-named root.
 
-This catalog is hand-maintained — when you discover a new drift during a workflow, append it here in the same PR.
+This catalog is hand-maintained, AND the **path and verb** rows are mirrored by `bin/csw_api.py`'s `PATH_ALIASES` (`tests/test_alias_sync.py` enforces the mirror). When `CSW_DEPLOYMENT=selfhosted` is resolved, the helper transparently rewrites canonical paths to the alt and emits a one-line `[csw_api] rewriting …` stderr note per rewrite. Body-shape rows (`scopeName`) and metric-field rows (`bandwidth_bytes_per_second`) are NOT transparently fixed — they stay caller-side. When you discover a new path/verb drift during a workflow, append it to both the catalog and `PATH_ALIASES` in the same PR.
 
 ## Authentication
 
