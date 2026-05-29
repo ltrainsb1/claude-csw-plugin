@@ -420,6 +420,62 @@ class TestGetDeploymentCLI(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "saas")
 
 
+class TestVerbChangeBodyDrop(unittest.TestCase):
+    def setUp(self):
+        os.environ["CSW_API_URL"] = "https://example.invalid"
+        os.environ["CSW_API_KEY"] = "deadbeef"
+        os.environ["CSW_API_SECRET"] = "cafebabe"
+        os.environ["CSW_DEPLOYMENT"] = "selfhosted"
+
+    def tearDown(self):
+        for k in ("CSW_API_URL", "CSW_API_KEY", "CSW_API_SECRET", "CSW_DEPLOYMENT"):
+            os.environ.pop(k, None)
+
+    def _capture_stderr(self):
+        import io, contextlib
+        buf = io.StringIO()
+        return buf, contextlib.redirect_stderr(buf)
+
+    def test_post_to_get_with_body_emits_drop_note(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request(
+                "POST", "/openapi/v1/inventory/dimensions", body={"foo": "bar"}
+            )
+        err = buf.getvalue()
+        self.assertIn("dropping POST body", err)
+        self.assertIn("/openapi/v1/inventory/dimensions", err)
+
+    def test_post_to_get_with_no_body_no_drop_note(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("POST", "/openapi/v1/inventory/dimensions")
+        err = buf.getvalue()
+        # Rewrite note should still fire, but no body-drop note
+        self.assertIn("rewriting", err)
+        self.assertNotIn("dropping POST body", err)
+
+    def test_same_verb_rewrite_does_not_drop_body(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request(
+                "POST", "/openapi/v1/flow_search/flows", body={"x": 1}
+            )
+        err = buf.getvalue()
+        # Path rewrites, but POST stays POST — no body drop
+        self.assertIn("rewriting", err)
+        self.assertNotIn("dropping POST body", err)
+
+    def test_no_rewrite_no_body_drop(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request(
+                "POST", "/openapi/v1/inventory/search", body={"filter": {}}
+            )
+        err = buf.getvalue()
+        self.assertNotIn("dropping POST body", err)
+
+
 class TestMakeRequestAlias(unittest.TestCase):
     def setUp(self):
         os.environ["CSW_API_URL"] = "https://example.invalid"

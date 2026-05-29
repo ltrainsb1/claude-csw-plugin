@@ -295,6 +295,15 @@ def make_request(method, path, body=None, params=None):
             f"(on-prem 4.0.x alias; see skills/csw/SKILL.md API surface variants)",
             file=sys.stderr,
         )
+        # On POST->GET verb changes, drop the body — a GET with a body
+        # is invalid HTTP semantics on the alt endpoints.
+        if method.upper() == "POST" and alt_method == "GET" and body is not None:
+            print(
+                f"[csw_api] dropping POST body for GET {alt_path} alias "
+                f"(operator: confirm dimensions endpoint doesn't need params)",
+                file=sys.stderr,
+            )
+            body = None
         method = alt_method
         path = alt_path
 
