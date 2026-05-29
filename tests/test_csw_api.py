@@ -165,5 +165,94 @@ class TestMakeRequestGate(unittest.TestCase):
         self.assertNotIn("not applicable", result.get("error") or "")
 
 
+class TestResolveDeployment(unittest.TestCase):
+    def setUp(self):
+        self._saved_urlopen = csw_api.urllib.request.urlopen
+
+    def tearDown(self):
+        csw_api.urllib.request.urlopen = self._saved_urlopen
+
+    def _stub_urlopen(self, status, body_bytes):
+        class _Resp:
+            def __init__(self):
+                self.status = status
+
+            def read(self):
+                return body_bytes
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def _fake_open(req, **kwargs):
+            return _Resp()
+
+        csw_api.urllib.request.urlopen = _fake_open
+
+    def test_many_vrfs_is_selfhosted(self):
+        self._stub_urlopen(200, b'[{"id":"a"},{"id":"b"},{"id":"c"}]')
+        self.assertEqual(
+            csw_api.resolve_deployment("https://x", "k", "s", True),
+            "selfhosted",
+        )
+
+    def test_single_vrf_is_saas(self):
+        self._stub_urlopen(200, b'[{"id":"Default"}]')
+        self.assertEqual(
+            csw_api.resolve_deployment("https://x", "k", "s", True), "saas"
+        )
+
+    def test_empty_vrf_list_is_saas(self):
+        self._stub_urlopen(200, b"[]")
+        self.assertEqual(
+            csw_api.resolve_deployment("https://x", "k", "s", True), "saas"
+        )
+
+    def test_403_is_saas(self):
+        import urllib.error
+
+        def _fake_open(req, **kwargs):
+            raise urllib.error.HTTPError(
+                "https://x/openapi/v1/vrfs", 403, "Forbidden", {}, None
+            )
+
+        csw_api.urllib.request.urlopen = _fake_open
+        self.assertEqual(
+            csw_api.resolve_deployment("https://x", "k", "s", True), "saas"
+        )
+
+    def test_5xx_is_unknown(self):
+        import urllib.error
+
+        def _fake_open(req, **kwargs):
+            raise urllib.error.HTTPError(
+                "https://x/openapi/v1/vrfs", 503, "Down", {}, None
+            )
+
+        csw_api.urllib.request.urlopen = _fake_open
+        self.assertEqual(
+            csw_api.resolve_deployment("https://x", "k", "s", True), "unknown"
+        )
+
+    def test_connection_failure_is_unknown(self):
+        import urllib.error
+
+        def _fake_open(req, **kwargs):
+            raise urllib.error.URLError("name resolution failed")
+
+        csw_api.urllib.request.urlopen = _fake_open
+        self.assertEqual(
+            csw_api.resolve_deployment("https://x", "k", "s", True), "unknown"
+        )
+
+    def test_malformed_json_is_unknown(self):
+        self._stub_urlopen(200, b"not json")
+        self.assertEqual(
+            csw_api.resolve_deployment("https://x", "k", "s", True), "unknown"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

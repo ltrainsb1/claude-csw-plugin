@@ -84,6 +84,54 @@ def applicable(method, path, deployment):
     return False, f"endpoint {p} not applicable on {deployment} deployment"
 
 
+def resolve_deployment(base_url, api_key, api_secret, verify_ssl):
+    """Classify the cluster by probing GET /openapi/v1/vrfs.
+
+    Returns 'saas', 'selfhosted', or 'unknown'. Never raises.
+    Does its own HMAC signing inline to avoid recursing into make_request().
+    """
+    path = "/openapi/v1/vrfs"
+    content_type = "application/json"
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")
+    signature = compute_signature(api_secret, "GET", path, "", content_type, timestamp)
+    headers = {
+        "Content-Type": content_type,
+        "Id": api_key,
+        "Authorization": signature,
+        "Timestamp": timestamp,
+        "User-Agent": "claude-csw-skill/1.0 (deployment-probe)",
+    }
+    url = f"{base_url.rstrip('/')}{path}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+
+    ctx = None
+    if not verify_ssl:
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+    try:
+        kwargs = {"context": ctx} if ctx else {}
+        with urllib.request.urlopen(req, **kwargs) as resp:
+            body = resp.read().decode("utf-8")
+            data = json.loads(body)
+            if not isinstance(data, list):
+                return "unknown"
+            # Heuristic: multiple VRFs => self-hosted; one or none => SaaS tenant.
+            return "selfhosted" if len(data) > 1 else "saas"
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return "saas"
+        print(f"[csw_api] deployment probe got HTTP {e.code}; treating as unknown",
+              file=sys.stderr)
+        return "unknown"
+    except (urllib.error.URLError, json.JSONDecodeError, ValueError) as e:
+        print(f"[csw_api] deployment probe failed: {e}; treating as unknown",
+              file=sys.stderr)
+        return "unknown"
+
+
 def get_config():
     url = os.environ.get("CSW_API_URL", "").rstrip("/")
     key = os.environ.get("CSW_API_KEY", "")
