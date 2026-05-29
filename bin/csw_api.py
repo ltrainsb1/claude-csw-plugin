@@ -209,16 +209,18 @@ def compute_signature(secret, method, path, checksum, content_type, timestamp):
 def make_request(method, path, body=None, params=None):
     base_url, api_key, api_secret, verify_ssl = get_config()
 
-    # Deployment applicability gate. Resolve env var (auto skipped here —
-    # auto-resolution happens in get_config in Task 6). Refusals never sign,
-    # never touch the network.
-    # Gate decision is based on path without query string. _match_endpoint
-    # strips '?...' so insertion before or after the params block is equivalent.
+    # Deployment applicability gate. Refusals never sign, never touch the
+    # network. Gate decision is based on path without query string —
+    # _match_endpoint strips '?...' so insertion before or after the params
+    # block is equivalent.
     deployment = _get_deployment_env()
     if deployment == "auto":
-        # Pre-Task-6 fallback: treat auto as unknown if get_config hasn't
-        # resolved it yet. This keeps T5 testable independently of T6.
-        deployment = "unknown"
+        cached = _read_cache(base_url)
+        if cached is not None:
+            deployment = cached
+        else:
+            deployment = resolve_deployment(base_url, api_key, api_secret, verify_ssl)
+            _write_cache(base_url, deployment)
     ok, reason = applicable(method, path, deployment)
     if not ok:
         return {
@@ -304,8 +306,25 @@ def make_request(method, path, body=None, params=None):
 
 
 def main():
+    # Handle --get-deployment as a standalone command.
+    if "--get-deployment" in sys.argv:
+        url, key, secret, verify_ssl = get_config()
+        env_value = _get_deployment_env()
+        if env_value == "auto":
+            cached = _read_cache(url)
+            if cached is not None:
+                print(cached)
+                return
+            resolved = resolve_deployment(url, key, secret, verify_ssl)
+            _write_cache(url, resolved)
+            print(resolved)
+            return
+        print(env_value)
+        return
+
     if len(sys.argv) < 3:
-        print("Usage: csw_api.py METHOD PATH [BODY_JSON] [--limit N] [--offset N]")
+        print("Usage: csw_api.py METHOD PATH [BODY_JSON] [--limit N] [--offset N] [--deployment saas|selfhosted|unknown]")
+        print("       csw_api.py --get-deployment")
         print()
         print("Examples:")
         print('  csw_api.py GET /openapi/v1/scopes')
@@ -325,6 +344,9 @@ def main():
             i += 2
         elif sys.argv[i] == "--offset" and i + 1 < len(sys.argv):
             params["offset"] = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == "--deployment" and i + 1 < len(sys.argv):
+            os.environ["CSW_DEPLOYMENT"] = sys.argv[i + 1]
             i += 2
         elif sys.argv[i].startswith("--"):
             key = sys.argv[i].lstrip("-")

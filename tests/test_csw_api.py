@@ -310,5 +310,88 @@ class TestDeploymentCache(unittest.TestCase):
         self.assertIsNone(csw_api._read_cache("https://x.example.com"))
 
 
+class TestAutoResolution(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.mkdtemp(prefix="csw_auto_test_")
+        os.environ["CLAUDE_PLUGIN_ROOT"] = self._tmp
+        os.environ["CSW_API_URL"] = "https://probe.example.invalid"
+        os.environ["CSW_API_KEY"] = "k"
+        os.environ["CSW_API_SECRET"] = "s"
+        os.environ["CSW_DEPLOYMENT"] = "auto"
+        self._saved_urlopen = csw_api.urllib.request.urlopen
+
+    def tearDown(self):
+        import shutil
+        os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+        for k in ("CSW_API_URL", "CSW_API_KEY", "CSW_API_SECRET", "CSW_DEPLOYMENT"):
+            os.environ.pop(k, None)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        csw_api.urllib.request.urlopen = self._saved_urlopen
+
+    def test_auto_resolves_via_probe_then_caches(self):
+        # Stub the probe to return a saas-shaped /vrfs (one entry).
+        probe_calls = {"n": 0}
+
+        class _Resp:
+            status = 200
+            def read(self): return b'[{"id":"Default"}]'
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def _fake_open(req, **kwargs):
+            probe_calls["n"] += 1
+            return _Resp()
+
+        csw_api.urllib.request.urlopen = _fake_open
+
+        # First call to a refused (selfhosted-only) endpoint:
+        # auto -> probe -> saas -> gate REFUSES (since service_health is H-only).
+        r = csw_api.make_request("GET", "/openapi/v1/service_health")
+        self.assertEqual(r["status"], 0)
+        self.assertIn("not applicable", r["error"])
+        # Cache should now be populated.
+        self.assertEqual(csw_api._read_cache(os.environ["CSW_API_URL"]), "saas")
+        # Second call: cache hit, NO new probe.
+        before = probe_calls["n"]
+        r2 = csw_api.make_request("GET", "/openapi/v1/service_health")
+        self.assertEqual(r2["status"], 0)
+        self.assertEqual(probe_calls["n"], before, "probe should not re-run")
+
+    def test_explicit_env_var_skips_probe(self):
+        os.environ["CSW_DEPLOYMENT"] = "saas"
+        sentinel = {"called": False}
+
+        def _fake_open(req, **kwargs):
+            sentinel["called"] = True
+            raise AssertionError("should not have been called")
+
+        csw_api.urllib.request.urlopen = _fake_open
+        r = csw_api.make_request("GET", "/openapi/v1/service_health")
+        self.assertEqual(r["status"], 0)
+        self.assertIn("not applicable", r["error"])
+        self.assertFalse(sentinel["called"])
+
+
+class TestGetDeploymentCLI(unittest.TestCase):
+    def test_get_deployment_flag_prints_resolved_value(self):
+        # We can't easily invoke main() in-process because it sys.exits,
+        # so use subprocess.
+        import subprocess
+        env = os.environ.copy()
+        env["CSW_API_URL"] = "https://probe.example.invalid"
+        env["CSW_API_KEY"] = "k"
+        env["CSW_API_SECRET"] = "s"
+        env["CSW_DEPLOYMENT"] = "saas"  # explicit so no probe
+        result = subprocess.run(
+            ["python3", os.path.join(
+                os.path.dirname(__file__), "..", "bin", "csw_api.py"),
+             "--get-deployment"],
+            env=env, capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "saas")
+
+
 if __name__ == "__main__":
     unittest.main()
