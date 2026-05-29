@@ -44,11 +44,20 @@ def _get_deployment_env():
     return raw
 
 
-# Per-endpoint deployment applicability.
-# Only endpoints that are NOT available on both deployments need a row.
-# Anything not listed here is treated as "available on both" (permissive default).
-# Matrix mirrors the Deploy column in skills/csw/api-reference.md;
-# the two must be hand-synced (see ai_docs/docs/csw-deployment-models.md).
+# Per-endpoint deployment applicability. Mirrors the Deploy column in
+# skills/csw/api-reference.md; both must be hand-synced in a single commit.
+# Only endpoints that are NOT available on both deployments need a row here —
+# the default (no row) means "available on both."
+#
+# Current non-Both endpoints:
+#   /openapi/v1/service_health                 H-only — cluster internals
+#   /openapi/v1/connector/rotate_certificates  S-only — Secure Connector tunnel lifecycle
+#
+# Cross-deployment-but-content-differs endpoints (NOT gated; consumers
+# handle interpretation):
+#   /openapi/v1/vrfs                  single Default on SaaS vs. many on selfhosted
+#   /openapi/v1/software/versions     Cisco-curated on SaaS vs. customer-uploaded
+#   /openapi/v1/connector/status      "not configured" on most selfhosted clusters
 ENDPOINT_MATRIX = [
     ("GET",  "/openapi/v1/service_health",                  frozenset({"selfhosted"})),
     ("POST", "/openapi/v1/connector/rotate_certificates",   frozenset({"saas"})),

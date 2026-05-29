@@ -86,6 +86,25 @@ class TestEndpointMatrix(unittest.TestCase):
         self.assertIsNotNone(row)
 
 
+class TestMatrixCompleteness(unittest.TestCase):
+    """Pin the matrix to exactly the two non-Both rows from the design doc.
+    Any future change to ENDPOINT_MATRIX must update this test AND
+    skills/csw/api-reference.md's Deploy column in the same commit."""
+
+    def test_matrix_has_exactly_two_rows(self):
+        self.assertEqual(len(csw_api.ENDPOINT_MATRIX), 2)
+
+    def test_matrix_rows_are_the_documented_two(self):
+        rows_as_tuples = sorted(
+            (m, p, tuple(sorted(d))) for m, p, d in csw_api.ENDPOINT_MATRIX
+        )
+        expected = sorted([
+            ("GET", "/openapi/v1/service_health", ("selfhosted",)),
+            ("POST", "/openapi/v1/connector/rotate_certificates", ("saas",)),
+        ])
+        self.assertEqual(rows_as_tuples, expected)
+
+
 class TestApplicable(unittest.TestCase):
     def test_saas_refuses_selfhosted_only_endpoint(self):
         ok, reason = csw_api.applicable("GET", "/openapi/v1/service_health", "saas")
