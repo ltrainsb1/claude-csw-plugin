@@ -119,6 +119,26 @@ def applicable(method, path, deployment):
     return False, f"endpoint {p} not applicable on {deployment} deployment"
 
 
+def _alias_endpoint(method, path, deployment):
+    """Return (alt_method, alt_path) if a PATH_ALIASES row matches and
+    deployment is 'selfhosted'; otherwise return (method, path) unchanged.
+    Pure function: no stderr, no side effects.
+
+    Query strings are stripped for matching and reattached to the alt path."""
+    if deployment != "selfhosted":
+        return method, path
+    if "?" in path:
+        bare_path, query = path.split("?", 1)
+        query = "?" + query
+    else:
+        bare_path, query = path, ""
+    upper_method = method.upper()
+    for canonical_method, canonical_path, alt_method, alt_path in PATH_ALIASES:
+        if canonical_method == upper_method and canonical_path == bare_path:
+            return alt_method, alt_path + query
+    return method, path
+
+
 def resolve_deployment(base_url, api_key, api_secret, verify_ssl):
     """Classify the cluster by probing GET /openapi/v1/vrfs.
 

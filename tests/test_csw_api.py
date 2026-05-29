@@ -420,6 +420,58 @@ class TestGetDeploymentCLI(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "saas")
 
 
+class TestAliasEndpoint(unittest.TestCase):
+    def test_saas_returns_unchanged(self):
+        result = csw_api._alias_endpoint("POST", "/openapi/v1/flow_search/flows", "saas")
+        self.assertEqual(result, ("POST", "/openapi/v1/flow_search/flows"))
+
+    def test_unknown_returns_unchanged(self):
+        result = csw_api._alias_endpoint("POST", "/openapi/v1/flow_search/flows", "unknown")
+        self.assertEqual(result, ("POST", "/openapi/v1/flow_search/flows"))
+
+    def test_auto_returns_unchanged(self):
+        # auto should never reach here in practice, but be defensive
+        result = csw_api._alias_endpoint("POST", "/openapi/v1/flow_search/flows", "auto")
+        self.assertEqual(result, ("POST", "/openapi/v1/flow_search/flows"))
+
+    def test_selfhosted_path_rename(self):
+        result = csw_api._alias_endpoint(
+            "POST", "/openapi/v1/flow_search/flows", "selfhosted"
+        )
+        self.assertEqual(result, ("POST", "/openapi/v1/flowsearch"))
+
+    def test_selfhosted_verb_change(self):
+        result = csw_api._alias_endpoint(
+            "POST", "/openapi/v1/inventory/dimensions", "selfhosted"
+        )
+        self.assertEqual(result, ("GET", "/openapi/v1/inventory/dimensions"))
+
+    def test_path_not_in_table_returns_unchanged(self):
+        result = csw_api._alias_endpoint(
+            "GET", "/openapi/v1/applications", "selfhosted"
+        )
+        self.assertEqual(result, ("GET", "/openapi/v1/applications"))
+
+    def test_method_mismatch_no_alias(self):
+        # Table only aliases POST /flow_search/flows; GET should be untouched
+        result = csw_api._alias_endpoint(
+            "GET", "/openapi/v1/flow_search/flows", "selfhosted"
+        )
+        self.assertEqual(result, ("GET", "/openapi/v1/flow_search/flows"))
+
+    def test_query_string_preserved_through_path_rename(self):
+        result = csw_api._alias_endpoint(
+            "POST", "/openapi/v1/flow_search/flows?limit=50", "selfhosted"
+        )
+        self.assertEqual(result, ("POST", "/openapi/v1/flowsearch?limit=50"))
+
+    def test_query_string_preserved_through_verb_change(self):
+        result = csw_api._alias_endpoint(
+            "POST", "/openapi/v1/inventory/dimensions?foo=bar", "selfhosted"
+        )
+        self.assertEqual(result, ("GET", "/openapi/v1/inventory/dimensions?foo=bar"))
+
+
 class TestPathAliasesStructure(unittest.TestCase):
     def test_constant_exists_and_is_list(self):
         self.assertIsInstance(csw_api.PATH_ALIASES, list)
