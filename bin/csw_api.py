@@ -19,6 +19,15 @@ Optional:
                      Controls the deployment-applicability gate. 'auto' probes
                      /openapi/v1/vrfs on first call and caches the result under
                      $CLAUDE_PLUGIN_ROOT/.csw_deployment_cache_<hash>.
+
+Module constants:
+    PATH_ALIASES   - Hand-maintained list of (canonical_method, canonical_path,
+                     alt_method, alt_path) tuples. When the resolved deployment
+                     is 'selfhosted', make_request() transparently rewrites
+                     canonical SaaS-spec paths to their on-prem 4.0.x
+                     equivalents and emits a one-line stderr note per rewrite.
+                     Mirrors skills/csw/SKILL.md "API surface variants"
+                     catalog; tests/test_alias_sync.py enforces the mirror.
 """
 
 import base64

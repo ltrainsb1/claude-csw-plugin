@@ -18,6 +18,9 @@ class TestDocsMentionDeployment(unittest.TestCase):
     def test_module_docstring_mentions_get_deployment_flag(self):
         self.assertIn("--get-deployment", csw_api.__doc__ or "")
 
+    def test_module_docstring_mentions_path_aliases(self):
+        self.assertIn("PATH_ALIASES", csw_api.__doc__ or "")
+
 
 class TestDeploymentEnv(unittest.TestCase):
     def setUp(self):
