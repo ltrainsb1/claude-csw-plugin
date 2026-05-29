@@ -420,6 +420,58 @@ class TestGetDeploymentCLI(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "saas")
 
 
+class TestMakeRequestAlias(unittest.TestCase):
+    def setUp(self):
+        os.environ["CSW_API_URL"] = "https://example.invalid"
+        os.environ["CSW_API_KEY"] = "deadbeef"
+        os.environ["CSW_API_SECRET"] = "cafebabe"
+        os.environ["CSW_DEPLOYMENT"] = "selfhosted"
+
+    def tearDown(self):
+        for k in ("CSW_API_URL", "CSW_API_KEY", "CSW_API_SECRET", "CSW_DEPLOYMENT"):
+            os.environ.pop(k, None)
+
+    def _capture_stderr(self):
+        import io
+        import contextlib
+        buf = io.StringIO()
+        return buf, contextlib.redirect_stderr(buf)
+
+    def test_selfhosted_flow_search_emits_rewrite_note(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("POST", "/openapi/v1/flow_search/flows", body={"x": 1})
+        err = buf.getvalue()
+        self.assertIn("rewriting", err)
+        self.assertIn("/openapi/v1/flow_search/flows", err)
+        self.assertIn("/openapi/v1/flowsearch", err)
+        self.assertIn("on-prem 4.0.x", err)
+
+    def test_saas_does_not_rewrite(self):
+        os.environ["CSW_DEPLOYMENT"] = "saas"
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("POST", "/openapi/v1/flow_search/flows", body={"x": 1})
+        err = buf.getvalue()
+        self.assertNotIn("rewriting", err)
+
+    def test_unknown_does_not_rewrite(self):
+        os.environ["CSW_DEPLOYMENT"] = "unknown"
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("POST", "/openapi/v1/flow_search/flows", body={"x": 1})
+        err = buf.getvalue()
+        self.assertNotIn("rewriting", err)
+
+    def test_non_aliased_path_emits_no_note(self):
+        # GET /applications is B with no rewrite rule
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("GET", "/openapi/v1/applications")
+        err = buf.getvalue()
+        self.assertNotIn("rewriting", err)
+
+
 class TestAliasEndpoint(unittest.TestCase):
     def test_saas_returns_unchanged(self):
         result = csw_api._alias_endpoint("POST", "/openapi/v1/flow_search/flows", "saas")

@@ -284,6 +284,20 @@ def make_request(method, path, body=None, params=None):
             "data": None,
         }
 
+    # Path/verb alias resolution. Transparently rewrites canonical
+    # (SaaS-spec) paths to their on-prem 4.0.x equivalents when the
+    # resolved deployment is 'selfhosted'. Mirrors PATH_ALIASES /
+    # skills/csw/SKILL.md API-surface-variants catalog.
+    alt_method, alt_path = _alias_endpoint(method, path, deployment)
+    if (alt_method, alt_path) != (method, path):
+        print(
+            f"[csw_api] rewriting {method} {path} -> {alt_method} {alt_path} "
+            f"(on-prem 4.0.x alias; see skills/csw/SKILL.md API surface variants)",
+            file=sys.stderr,
+        )
+        method = alt_method
+        path = alt_path
+
     if params:
         query = urllib.parse.urlencode(params)
         path = f"{path}?{query}"
