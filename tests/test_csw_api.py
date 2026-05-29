@@ -128,5 +128,42 @@ class TestApplicable(unittest.TestCase):
         self.assertTrue(ok)
 
 
+class TestMakeRequestGate(unittest.TestCase):
+    def setUp(self):
+        os.environ["CSW_API_URL"] = "https://example.invalid"
+        os.environ["CSW_API_KEY"] = "deadbeef"
+        os.environ["CSW_API_SECRET"] = "cafebabe"
+        os.environ["CSW_DEPLOYMENT"] = "saas"
+
+    def tearDown(self):
+        for k in ("CSW_API_URL", "CSW_API_KEY", "CSW_API_SECRET", "CSW_DEPLOYMENT"):
+            os.environ.pop(k, None)
+
+    def test_saas_refuses_service_health_without_network(self):
+        # No network mock — if the gate fails, this would hit
+        # https://example.invalid and the test would hang or error.
+        result = csw_api.make_request("GET", "/openapi/v1/service_health")
+        self.assertEqual(result["status"], 0)
+        self.assertIn("not applicable", result["error"])
+        self.assertIsNone(result["data"])
+
+    def test_selfhosted_refuses_rotate_certificates_without_network(self):
+        os.environ["CSW_DEPLOYMENT"] = "selfhosted"
+        result = csw_api.make_request(
+            "POST", "/openapi/v1/connector/rotate_certificates", body={}
+        )
+        self.assertEqual(result["status"], 0)
+        self.assertIn("not applicable", result["error"])
+
+    def test_unknown_deployment_does_not_gate(self):
+        os.environ["CSW_DEPLOYMENT"] = "unknown"
+        # Calling a S-only endpoint on unknown should attempt the network call,
+        # not short-circuit. We assert by checking the error is NOT the gate
+        # error — it should be a connection failure on the bogus URL instead.
+        result = csw_api.make_request("GET", "/openapi/v1/service_health")
+        self.assertEqual(result["status"], 0)
+        self.assertNotIn("not applicable", result.get("error") or "")
+
+
 if __name__ == "__main__":
     unittest.main()

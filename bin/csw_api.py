@@ -118,6 +118,24 @@ def compute_signature(secret, method, path, checksum, content_type, timestamp):
 def make_request(method, path, body=None, params=None):
     base_url, api_key, api_secret, verify_ssl = get_config()
 
+    # Deployment applicability gate. Resolve env var (auto skipped here —
+    # auto-resolution happens in get_config in Task 6). Refusals never sign,
+    # never touch the network.
+    # Gate decision is based on path without query string. _match_endpoint
+    # strips '?...' so insertion before or after the params block is equivalent.
+    deployment = _get_deployment_env()
+    if deployment == "auto":
+        # Pre-Task-6 fallback: treat auto as unknown if get_config hasn't
+        # resolved it yet. This keeps T5 testable independently of T6.
+        deployment = "unknown"
+    ok, reason = applicable(method, path, deployment)
+    if not ok:
+        return {
+            "status": 0,
+            "error": reason,
+            "data": None,
+        }
+
     if params:
         query = urllib.parse.urlencode(params)
         path = f"{path}?{query}"
