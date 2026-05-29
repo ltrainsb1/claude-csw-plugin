@@ -69,6 +69,27 @@ ENDPOINT_MATRIX = [
 ]
 
 
+# Per-endpoint deployment alias table. Mirrors the path/verb rows in
+# skills/csw/SKILL.md "API surface variants" catalog one-to-one
+# (tests/test_alias_sync.py enforces the mirror).
+#
+# Only used when the resolved deployment is 'selfhosted'. Body-shape and
+# metric-field drifts from the catalog are NOT here — those stay
+# caller-side per the PR #5 decision.
+PATH_ALIASES = [
+    # (canonical_method, canonical_path, alt_method, alt_path)
+    ("POST", "/openapi/v1/flow_search/flows",      "POST", "/openapi/v1/flowsearch"),
+    ("POST", "/openapi/v1/flow_search/topn",       "POST", "/openapi/v1/flowsearch/topn"),
+    # metrics row: alt verb (GET) inferred from sibling endpoints during PR #5
+    # diagnostic. Documented in skills/csw/api-reference.md on-prem callout
+    # but NOT directly tested on a 4.0.x cluster — verify when cluster access
+    # permits. If wrong, helper will rewrite + 405 (recoverable).
+    ("POST", "/openapi/v1/flow_search/metrics",    "GET",  "/openapi/v1/flowsearch/metrics"),
+    ("POST", "/openapi/v1/flow_search/dimensions", "GET",  "/openapi/v1/flowsearch/dimensions"),
+    ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
+]
+
+
 def _match_endpoint(method, path):
     """Find the matrix row for (method, path) or None.
     Strips query strings; exact path match against the rows."""

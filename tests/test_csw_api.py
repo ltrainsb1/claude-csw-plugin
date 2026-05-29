@@ -420,5 +420,38 @@ class TestGetDeploymentCLI(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "saas")
 
 
+class TestPathAliasesStructure(unittest.TestCase):
+    def test_constant_exists_and_is_list(self):
+        self.assertIsInstance(csw_api.PATH_ALIASES, list)
+
+    def test_has_exactly_5_rows(self):
+        self.assertEqual(len(csw_api.PATH_ALIASES), 5)
+
+    def test_every_row_is_4_tuple_of_strings(self):
+        for row in csw_api.PATH_ALIASES:
+            self.assertEqual(len(row), 4)
+            for field in row:
+                self.assertIsInstance(field, str)
+
+    def test_methods_are_valid_http_verbs(self):
+        valid = {"GET", "POST", "PUT", "DELETE"}
+        for canonical_method, _, alt_method, _ in csw_api.PATH_ALIASES:
+            self.assertIn(canonical_method, valid)
+            self.assertIn(alt_method, valid)
+
+    def test_contains_the_five_documented_rows(self):
+        # Each row from the design doc / PR #5 catalog (with PR #5
+        # catalog amendment in T6 adding the metrics row).
+        expected = {
+            ("POST", "/openapi/v1/flow_search/flows",      "POST", "/openapi/v1/flowsearch"),
+            ("POST", "/openapi/v1/flow_search/topn",       "POST", "/openapi/v1/flowsearch/topn"),
+            ("POST", "/openapi/v1/flow_search/metrics",    "GET",  "/openapi/v1/flowsearch/metrics"),
+            ("POST", "/openapi/v1/flow_search/dimensions", "GET",  "/openapi/v1/flowsearch/dimensions"),
+            ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
+        }
+        actual = {tuple(row) for row in csw_api.PATH_ALIASES}
+        self.assertEqual(actual, expected)
+
+
 if __name__ == "__main__":
     unittest.main()
