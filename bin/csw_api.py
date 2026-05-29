@@ -28,6 +28,22 @@ import urllib.parse
 from datetime import datetime, timezone
 
 
+DEPLOYMENT_VALUES = {"saas", "selfhosted", "auto", "unknown"}
+
+
+def _get_deployment_env():
+    """Read CSW_DEPLOYMENT, normalize to a member of DEPLOYMENT_VALUES.
+    Invalid values silently fall back to 'auto'. Never raises."""
+    raw = os.environ.get("CSW_DEPLOYMENT", "").strip().lower()
+    if not raw:
+        return "auto"
+    if raw not in DEPLOYMENT_VALUES:
+        print(f"[csw_api] invalid CSW_DEPLOYMENT={raw!r}; falling back to 'auto'",
+              file=sys.stderr)
+        return "auto"
+    return raw
+
+
 def get_config():
     url = os.environ.get("CSW_API_URL", "").rstrip("/")
     key = os.environ.get("CSW_API_KEY", "")
