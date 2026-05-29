@@ -23,6 +23,10 @@ If any are missing, prompt the user to set them. Check with:
 echo "URL: ${CSW_API_URL:-NOT SET}" && echo "KEY: ${CSW_API_KEY:+SET}" && echo "SECRET: ${CSW_API_SECRET:+SET}"
 ```
 
+**Deployment models.** This skill works against both Cisco-hosted SaaS tenants and customer-managed self-hosted clusters. The helper auto-detects on first call (`CSW_DEPLOYMENT=auto`, default); set `CSW_DEPLOYMENT=saas|selfhosted` to skip the probe.
+
+**What differs for this skill specifically:** the `drift` report's `software/versions` catalog is Cisco-curated on SaaS and customer-uploaded on self-hosted; the lag thresholds are deployment-relative.
+
 ## Authentication
 
 CSW uses HMAC digest authentication. All API calls must be made using the helper script at `${CLAUDE_PLUGIN_ROOT}/bin/csw_api.py`:
@@ -232,7 +236,7 @@ Workloads not enforcing despite scope intent:
 ## Error handling
 
 - 401/403 mid-report → stop, report which endpoint failed, point at the capability mapping in this skill.
-- 404 → resource doesn't exist; surface in the report (e.g., "workspace X listed in applications but details endpoint returned 404").
+- 404 → resource doesn't exist OR endpoint not exposed on this deployment; cross-reference `skills/csw/api-reference.md` Deploy column. The helper's "not applicable" error must surface verbatim — never silently fall through.
 - 500 → CSW cluster issue; suggest checking service health (`/csw report` from the main skill includes this).
 - Connection failure → verify `CSW_API_URL` is correct and reachable.
 - Always show HTTP status + reason from CSW. No silent failures.
