@@ -19,6 +19,15 @@ Optional:
                      Controls the deployment-applicability gate. 'auto' probes
                      /openapi/v1/vrfs on first call and caches the result under
                      $CLAUDE_PLUGIN_ROOT/.csw_deployment_cache_<hash>.
+
+Module constants:
+    PATH_ALIASES   - Hand-maintained list of (canonical_method, canonical_path,
+                     alt_method, alt_path) tuples. When the resolved deployment
+                     is 'selfhosted', make_request() transparently rewrites
+                     canonical SaaS-spec paths to their on-prem 4.0.x
+                     equivalents and emits a one-line stderr note per rewrite.
+                     Mirrors skills/csw/SKILL.md "API surface variants"
+                     catalog; tests/test_alias_sync.py enforces the mirror.
 """
 
 import base64
@@ -69,6 +78,26 @@ ENDPOINT_MATRIX = [
 ]
 
 
+# Per-endpoint deployment alias table. Mirrors the path/verb rows in
+# skills/csw/SKILL.md "API surface variants" catalog one-to-one
+# (tests/test_alias_sync.py enforces the mirror).
+#
+# Only used when the resolved deployment is 'selfhosted'. Body-shape and
+# metric-field drifts from the catalog are NOT here — those stay
+# caller-side per the PR #5 decision.
+PATH_ALIASES = [
+    # (canonical_method, canonical_path, alt_method, alt_path)
+    ("POST", "/openapi/v1/flow_search/flows",      "POST", "/openapi/v1/flowsearch"),
+    ("POST", "/openapi/v1/flow_search/topn",       "POST", "/openapi/v1/flowsearch/topn"),
+    # metrics row: alt verb (GET) was inferred during PR #5 from sibling
+    # endpoints; live-verified against tet-pov-rtp1.cpoc.co during PR #6
+    # post-flight 2c (HTTP 200 + 59-item metrics list).
+    ("POST", "/openapi/v1/flow_search/metrics",    "GET",  "/openapi/v1/flowsearch/metrics"),
+    ("POST", "/openapi/v1/flow_search/dimensions", "GET",  "/openapi/v1/flowsearch/dimensions"),
+    ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
+]
+
+
 def _match_endpoint(method, path):
     """Find the matrix row for (method, path) or None.
     Strips query strings; exact path match against the rows."""
@@ -96,6 +125,26 @@ def applicable(method, path, deployment):
     if deployment in deploys:
         return True, None
     return False, f"endpoint {p} not applicable on {deployment} deployment"
+
+
+def _alias_endpoint(method, path, deployment):
+    """Return (alt_method, alt_path) if a PATH_ALIASES row matches and
+    deployment is 'selfhosted'; otherwise return (method, path) unchanged.
+    Pure function: no stderr, no side effects.
+
+    Query strings are stripped for matching and reattached to the alt path."""
+    if deployment != "selfhosted":
+        return method, path
+    if "?" in path:
+        bare_path, query = path.split("?", 1)
+        query = "?" + query
+    else:
+        bare_path, query = path, ""
+    upper_method = method.upper()
+    for canonical_method, canonical_path, alt_method, alt_path in PATH_ALIASES:
+        if canonical_method == upper_method and canonical_path == bare_path:
+            return alt_method, alt_path + query
+    return method, path
 
 
 def resolve_deployment(base_url, api_key, api_secret, verify_ssl):
@@ -242,6 +291,29 @@ def make_request(method, path, body=None, params=None):
             "error": reason,
             "data": None,
         }
+
+    # Path/verb alias resolution. Transparently rewrites canonical
+    # (SaaS-spec) paths to their on-prem 4.0.x equivalents when the
+    # resolved deployment is 'selfhosted'. Mirrors PATH_ALIASES /
+    # skills/csw/SKILL.md API-surface-variants catalog.
+    alt_method, alt_path = _alias_endpoint(method, path, deployment)
+    if (alt_method, alt_path) != (method, path):
+        print(
+            f"[csw_api] rewriting {method} {path} -> {alt_method} {alt_path} "
+            f"(on-prem 4.0.x alias; see skills/csw/SKILL.md API surface variants)",
+            file=sys.stderr,
+        )
+        # On POST->GET verb changes, drop the body — a GET with a body
+        # is invalid HTTP semantics on the alt endpoints.
+        if method.upper() == "POST" and alt_method == "GET" and body is not None:
+            print(
+                f"[csw_api] dropping POST body for GET {alt_path} alias "
+                f"(operator: confirm dimensions endpoint doesn't need params)",
+                file=sys.stderr,
+            )
+            body = None
+        method = alt_method
+        path = alt_path
 
     if params:
         query = urllib.parse.urlencode(params)

@@ -18,6 +18,9 @@ class TestDocsMentionDeployment(unittest.TestCase):
     def test_module_docstring_mentions_get_deployment_flag(self):
         self.assertIn("--get-deployment", csw_api.__doc__ or "")
 
+    def test_module_docstring_mentions_path_aliases(self):
+        self.assertIn("PATH_ALIASES", csw_api.__doc__ or "")
+
 
 class TestDeploymentEnv(unittest.TestCase):
     def setUp(self):
@@ -418,6 +421,199 @@ class TestGetDeploymentCLI(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "saas")
+
+
+class TestVerbChangeBodyDrop(unittest.TestCase):
+    def setUp(self):
+        os.environ["CSW_API_URL"] = "https://example.invalid"
+        os.environ["CSW_API_KEY"] = "deadbeef"
+        os.environ["CSW_API_SECRET"] = "cafebabe"
+        os.environ["CSW_DEPLOYMENT"] = "selfhosted"
+
+    def tearDown(self):
+        for k in ("CSW_API_URL", "CSW_API_KEY", "CSW_API_SECRET", "CSW_DEPLOYMENT"):
+            os.environ.pop(k, None)
+
+    def _capture_stderr(self):
+        import io, contextlib
+        buf = io.StringIO()
+        return buf, contextlib.redirect_stderr(buf)
+
+    def test_post_to_get_with_body_emits_drop_note(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request(
+                "POST", "/openapi/v1/inventory/dimensions", body={"foo": "bar"}
+            )
+        err = buf.getvalue()
+        self.assertIn("dropping POST body", err)
+        self.assertIn("/openapi/v1/inventory/dimensions", err)
+
+    def test_post_to_get_with_no_body_no_drop_note(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("POST", "/openapi/v1/inventory/dimensions")
+        err = buf.getvalue()
+        # Rewrite note should still fire, but no body-drop note
+        self.assertIn("rewriting", err)
+        self.assertNotIn("dropping POST body", err)
+
+    def test_same_verb_rewrite_does_not_drop_body(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request(
+                "POST", "/openapi/v1/flow_search/flows", body={"x": 1}
+            )
+        err = buf.getvalue()
+        # Path rewrites, but POST stays POST — no body drop
+        self.assertIn("rewriting", err)
+        self.assertNotIn("dropping POST body", err)
+
+    def test_no_rewrite_no_body_drop(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request(
+                "POST", "/openapi/v1/inventory/search", body={"filter": {}}
+            )
+        err = buf.getvalue()
+        self.assertNotIn("dropping POST body", err)
+
+
+class TestMakeRequestAlias(unittest.TestCase):
+    def setUp(self):
+        os.environ["CSW_API_URL"] = "https://example.invalid"
+        os.environ["CSW_API_KEY"] = "deadbeef"
+        os.environ["CSW_API_SECRET"] = "cafebabe"
+        os.environ["CSW_DEPLOYMENT"] = "selfhosted"
+
+    def tearDown(self):
+        for k in ("CSW_API_URL", "CSW_API_KEY", "CSW_API_SECRET", "CSW_DEPLOYMENT"):
+            os.environ.pop(k, None)
+
+    def _capture_stderr(self):
+        import io
+        import contextlib
+        buf = io.StringIO()
+        return buf, contextlib.redirect_stderr(buf)
+
+    def test_selfhosted_flow_search_emits_rewrite_note(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("POST", "/openapi/v1/flow_search/flows", body={"x": 1})
+        err = buf.getvalue()
+        self.assertIn("rewriting", err)
+        self.assertIn("/openapi/v1/flow_search/flows", err)
+        self.assertIn("/openapi/v1/flowsearch", err)
+        self.assertIn("on-prem 4.0.x", err)
+
+    def test_saas_does_not_rewrite(self):
+        os.environ["CSW_DEPLOYMENT"] = "saas"
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("POST", "/openapi/v1/flow_search/flows", body={"x": 1})
+        err = buf.getvalue()
+        self.assertNotIn("rewriting", err)
+
+    def test_unknown_does_not_rewrite(self):
+        os.environ["CSW_DEPLOYMENT"] = "unknown"
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("POST", "/openapi/v1/flow_search/flows", body={"x": 1})
+        err = buf.getvalue()
+        self.assertNotIn("rewriting", err)
+
+    def test_non_aliased_path_emits_no_note(self):
+        # GET /applications is B with no rewrite rule
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("GET", "/openapi/v1/applications")
+        err = buf.getvalue()
+        self.assertNotIn("rewriting", err)
+
+
+class TestAliasEndpoint(unittest.TestCase):
+    def test_saas_returns_unchanged(self):
+        result = csw_api._alias_endpoint("POST", "/openapi/v1/flow_search/flows", "saas")
+        self.assertEqual(result, ("POST", "/openapi/v1/flow_search/flows"))
+
+    def test_unknown_returns_unchanged(self):
+        result = csw_api._alias_endpoint("POST", "/openapi/v1/flow_search/flows", "unknown")
+        self.assertEqual(result, ("POST", "/openapi/v1/flow_search/flows"))
+
+    def test_auto_returns_unchanged(self):
+        # auto should never reach here in practice, but be defensive
+        result = csw_api._alias_endpoint("POST", "/openapi/v1/flow_search/flows", "auto")
+        self.assertEqual(result, ("POST", "/openapi/v1/flow_search/flows"))
+
+    def test_selfhosted_path_rename(self):
+        result = csw_api._alias_endpoint(
+            "POST", "/openapi/v1/flow_search/flows", "selfhosted"
+        )
+        self.assertEqual(result, ("POST", "/openapi/v1/flowsearch"))
+
+    def test_selfhosted_verb_change(self):
+        result = csw_api._alias_endpoint(
+            "POST", "/openapi/v1/inventory/dimensions", "selfhosted"
+        )
+        self.assertEqual(result, ("GET", "/openapi/v1/inventory/dimensions"))
+
+    def test_path_not_in_table_returns_unchanged(self):
+        result = csw_api._alias_endpoint(
+            "GET", "/openapi/v1/applications", "selfhosted"
+        )
+        self.assertEqual(result, ("GET", "/openapi/v1/applications"))
+
+    def test_method_mismatch_no_alias(self):
+        # Table only aliases POST /flow_search/flows; GET should be untouched
+        result = csw_api._alias_endpoint(
+            "GET", "/openapi/v1/flow_search/flows", "selfhosted"
+        )
+        self.assertEqual(result, ("GET", "/openapi/v1/flow_search/flows"))
+
+    def test_query_string_preserved_through_path_rename(self):
+        result = csw_api._alias_endpoint(
+            "POST", "/openapi/v1/flow_search/flows?limit=50", "selfhosted"
+        )
+        self.assertEqual(result, ("POST", "/openapi/v1/flowsearch?limit=50"))
+
+    def test_query_string_preserved_through_verb_change(self):
+        result = csw_api._alias_endpoint(
+            "POST", "/openapi/v1/inventory/dimensions?foo=bar", "selfhosted"
+        )
+        self.assertEqual(result, ("GET", "/openapi/v1/inventory/dimensions?foo=bar"))
+
+
+class TestPathAliasesStructure(unittest.TestCase):
+    def test_constant_exists_and_is_list(self):
+        self.assertIsInstance(csw_api.PATH_ALIASES, list)
+
+    def test_has_exactly_5_rows(self):
+        self.assertEqual(len(csw_api.PATH_ALIASES), 5)
+
+    def test_every_row_is_4_tuple_of_strings(self):
+        for row in csw_api.PATH_ALIASES:
+            self.assertEqual(len(row), 4)
+            for field in row:
+                self.assertIsInstance(field, str)
+
+    def test_methods_are_valid_http_verbs(self):
+        valid = {"GET", "POST", "PUT", "DELETE"}
+        for canonical_method, _, alt_method, _ in csw_api.PATH_ALIASES:
+            self.assertIn(canonical_method, valid)
+            self.assertIn(alt_method, valid)
+
+    def test_contains_the_five_documented_rows(self):
+        # Each row from the design doc / PR #5 catalog (with PR #5
+        # catalog amendment in T6 adding the metrics row).
+        expected = {
+            ("POST", "/openapi/v1/flow_search/flows",      "POST", "/openapi/v1/flowsearch"),
+            ("POST", "/openapi/v1/flow_search/topn",       "POST", "/openapi/v1/flowsearch/topn"),
+            ("POST", "/openapi/v1/flow_search/metrics",    "GET",  "/openapi/v1/flowsearch/metrics"),
+            ("POST", "/openapi/v1/flow_search/dimensions", "GET",  "/openapi/v1/flowsearch/dimensions"),
+            ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
+        }
+        actual = {tuple(row) for row in csw_api.PATH_ALIASES}
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":
