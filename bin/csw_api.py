@@ -67,6 +67,23 @@ def _match_endpoint(method, path):
     return None
 
 
+def applicable(method, path, deployment):
+    """Decide whether a request should be sent given the resolved deployment.
+
+    Returns (True, None) to send, (False, reason) to refuse.
+    'unknown' deployment always allows; 'auto' should never reach here
+    (make_request resolves first). Invalid deployment values are permissive."""
+    if deployment not in {"saas", "selfhosted"}:
+        return True, None
+    row = _match_endpoint(method, path)
+    if row is None:
+        return True, None
+    _, p, deploys = row
+    if deployment in deploys:
+        return True, None
+    return False, f"endpoint {p} not applicable on {deployment} deployment"
+
+
 def get_config():
     url = os.environ.get("CSW_API_URL", "").rstrip("/")
     key = os.environ.get("CSW_API_KEY", "")

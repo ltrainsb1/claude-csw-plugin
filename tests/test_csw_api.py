@@ -86,5 +86,47 @@ class TestEndpointMatrix(unittest.TestCase):
         self.assertIsNotNone(row)
 
 
+class TestApplicable(unittest.TestCase):
+    def test_saas_refuses_selfhosted_only_endpoint(self):
+        ok, reason = csw_api.applicable("GET", "/openapi/v1/service_health", "saas")
+        self.assertFalse(ok)
+        self.assertIn("saas", reason)
+        self.assertIn("service_health", reason)
+
+    def test_selfhosted_refuses_saas_only_endpoint(self):
+        ok, reason = csw_api.applicable(
+            "POST", "/openapi/v1/connector/rotate_certificates", "selfhosted"
+        )
+        self.assertFalse(ok)
+        self.assertIn("selfhosted", reason)
+
+    def test_saas_allows_saas_endpoint(self):
+        ok, reason = csw_api.applicable(
+            "POST", "/openapi/v1/connector/rotate_certificates", "saas"
+        )
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    def test_selfhosted_allows_selfhosted_endpoint(self):
+        ok, reason = csw_api.applicable("GET", "/openapi/v1/service_health", "selfhosted")
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    def test_both_endpoint_allowed_on_either(self):
+        ok, _ = csw_api.applicable("GET", "/openapi/v1/applications", "saas")
+        self.assertTrue(ok)
+        ok, _ = csw_api.applicable("GET", "/openapi/v1/applications", "selfhosted")
+        self.assertTrue(ok)
+
+    def test_unknown_deployment_allows_everything(self):
+        ok, reason = csw_api.applicable("GET", "/openapi/v1/service_health", "unknown")
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    def test_invalid_deployment_argument_is_permissive(self):
+        ok, _ = csw_api.applicable("GET", "/openapi/v1/service_health", "garbage")
+        self.assertTrue(ok)
+
+
 if __name__ == "__main__":
     unittest.main()
