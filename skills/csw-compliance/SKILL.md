@@ -21,6 +21,10 @@ Same env vars as the other CSW skills: `CSW_API_URL`, `CSW_API_KEY`,
 echo "URL: ${CSW_API_URL:-NOT SET}" && echo "KEY: ${CSW_API_KEY:+SET}" && echo "SECRET: ${CSW_API_SECRET:+SET}"
 ```
 
+**Deployment models.** This skill works against both Cisco-hosted SaaS tenants and customer-managed self-hosted clusters. The helper auto-detects on first call (`CSW_DEPLOYMENT=auto`, default); set `CSW_DEPLOYMENT=saas|selfhosted` to skip the probe.
+
+**What differs for this skill specifically:** none — every endpoint used by the compliance runner (`bin/csw_compliance.py`) is available on both deployments.
+
 ## Read-only discipline (Iron Law)
 
 **This skill never proposes a write. No exceptions.** It evaluates controls and
@@ -73,7 +77,7 @@ do not re-score, re-rank, or add a "you are compliant" conclusion. The disclaime
 ## Error handling
 
 - 401/403 → control marked Indeterminate; tell the user which read capability is missing.
-- 404 → surface; 500 → suggest `/csw report` service health; connection failure → check `CSW_API_URL`.
+- 404 → resource missing OR endpoint not applicable on this deployment (cross-reference `skills/csw/api-reference.md` Deploy column); surface verbatim. 500 → suggest `/csw report` service health (self-hosted) or contact Cisco support (SaaS); connection failure → check `CSW_API_URL`.
 - Always show HTTP status. No silent failures.
 
 ## Adding a framework
