@@ -137,13 +137,19 @@ def _ratio(numerator, denominator, label):
 
 def _require_list(resp, path):
     """For list endpoints. resp has already passed _indet_if_bad (HTTP 200).
-    Returns (list, None) or (None, indeterminate-measurement) if the 200 body
-    is not a list — never coerce an unexpected shape into an empty list."""
+    Accepts EITHER a top-level list OR an envelope {"results": [...]}
+    (Tetration 4.0.x pagination shape on /sensors, etc.). Never coerces
+    unexpected shapes into an empty list."""
     data = resp.get("data")
-    if not isinstance(data, list):
-        return None, measurement(indeterminate=True,
-                                 reason=f"{path}: 200 but expected a list, got {type(data).__name__}")
-    return data, None
+    if isinstance(data, list):
+        return data, None
+    if isinstance(data, dict) and isinstance(data.get("results"), list):
+        return data["results"], None
+    return None, measurement(
+        indeterminate=True,
+        reason=f"{path}: 200 but expected a list or {{results: [...]}}, "
+               f"got {type(data).__name__}",
+    )
 
 
 def _require_number(resp, key, path):

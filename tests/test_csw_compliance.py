@@ -257,5 +257,42 @@ class TestRender(unittest.TestCase):
         self.assertIn("12.1", md)  # not-evidenceable row is shown
 
 
+class TestRequireListEnvelope(unittest.TestCase):
+    """Envelope shape support added in PR #7 — Tetration 4.0.x clusters
+    return {"results": [...]} on /sensors etc. instead of a top-level list."""
+
+    def test_top_level_list_still_works(self):
+        # Regression: pre-existing shape must still pass through unchanged.
+        resp = {"status": 200, "data": [{"id": "a"}, {"id": "b"}]}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(bad)
+        self.assertEqual(items, [{"id": "a"}, {"id": "b"}])
+
+    def test_envelope_with_results_key(self):
+        resp = {"status": 200, "data": {"results": [{"uuid": "x"}, {"uuid": "y"}]}}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(bad)
+        self.assertEqual(items, [{"uuid": "x"}, {"uuid": "y"}])
+
+    def test_empty_envelope_returns_empty_list(self):
+        resp = {"status": 200, "data": {"results": []}}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(bad)
+        self.assertEqual(items, [])
+
+    def test_dict_without_results_key_is_indeterminate(self):
+        resp = {"status": 200, "data": {"foo": "bar"}}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(items)
+        self.assertTrue(bad["indeterminate"])
+        self.assertIn("expected a list or", bad["reason"])
+
+    def test_results_key_with_non_list_value_is_indeterminate(self):
+        resp = {"status": 200, "data": {"results": "not a list"}}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(items)
+        self.assertTrue(bad["indeterminate"])
+
+
 if __name__ == "__main__":
     unittest.main()
