@@ -378,7 +378,9 @@ class TestInventoryEnforcementCount(unittest.TestCase):
     total_count, because on-prem Tetration 4.0.x returns {"results": [...]}
     envelope with no count field."""
 
-    LIMIT = 100000  # must stay in sync with the constant in inventory_enforcement_ratio
+    LIMIT = 50000  # must stay in sync with SEARCH_LIMIT in inventory_enforcement_ratio
+    # 50k is the cluster's hard cap on Tetration 4.0.x (HTTP 400 above);
+    # discovered during PR #8 T4 live acceptance.
 
     def _make_fetch(self, count_resp, search_resp, recorded_calls):
         def _fetch(method, path, body=None):

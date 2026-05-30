@@ -191,12 +191,14 @@ def inventory_enforcement_ratio(fetch, scope=None):
         return bad
     spath = "/openapi/v1/inventory/search"
     # PR #8: on-prem Tetration 4.0.x returns {"results": [...]} envelope with
-    # no total_count field, so we use limit=100000 + len(results) instead of
+    # no total_count field, so we use a high limit + len(results) instead of
     # _require_number(... "total_count"). _require_list (PR #7) accepts both
-    # top-level lists (legacy/SaaS) and envelopes. The 100000 ceiling is
-    # generous for typical clusters; truncation sentinel below catches the
-    # rare case where the actual count exceeds it.
-    SEARCH_LIMIT = 100000
+    # top-level lists (legacy/SaaS) and envelopes. 50000 is the cluster's
+    # hard cap on this version ("limit must be 50,000 or less" returned as
+    # HTTP 400 above that); discovered during PR #8 T4 live acceptance.
+    # Truncation sentinel below catches the rare case where the actual count
+    # equals the cap.
+    SEARCH_LIMIT = 50000
     body = {"filter": {"type": "eq", "field": "enforcement_status", "value": "enabled"},
             "dimensions": ["ip"], "limit": SEARCH_LIMIT}
     sresp = fetch("POST", spath, body)
