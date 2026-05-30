@@ -373,5 +373,95 @@ class TestRequireListEnvelope(unittest.TestCase):
         self.assertTrue(bad["indeterminate"])
 
 
+class TestInventoryEnforcementCount(unittest.TestCase):
+    """PR #8 — inventory_enforcement_ratio now uses len(results) instead of
+    total_count, because on-prem Tetration 4.0.x returns {"results": [...]}
+    envelope with no count field."""
+
+    LIMIT = 100000  # must stay in sync with the constant in inventory_enforcement_ratio
+
+    def _make_fetch(self, count_resp, search_resp, recorded_calls):
+        def _fetch(method, path, body=None):
+            recorded_calls.append((method, path, body))
+            if "/inventory/count" in path:
+                return count_resp
+            if "/inventory/search" in path:
+                return search_resp
+            return {"status": 404, "error": "no route", "data": None}
+        return _fetch
+
+    def test_high_limit_in_body(self):
+        # The runner must request enough records to actually count, not limit=0.
+        count_resp = {"status": 200, "data": {"count": 100}}
+        search_resp = {"status": 200, "data": {"results": []}}
+        calls = []
+        fetch = self._make_fetch(count_resp, search_resp, calls)
+        cc.inventory_enforcement_ratio(fetch)
+        search_calls = [c for c in calls if "/inventory/search" in c[1]]
+        self.assertEqual(len(search_calls), 1)
+        _, _, body = search_calls[0]
+        self.assertEqual(body.get("limit"), self.LIMIT)
+
+    def test_envelope_extraction_and_len_count(self):
+        # 5 enforcing of 100 total inventory → ratio 0.05.
+        count_resp = {"status": 200, "data": {"count": 100}}
+        search_resp = {"status": 200, "data": {
+            "results": [{"ip": f"10.0.0.{i}"} for i in range(5)]
+        }}
+        calls = []
+        fetch = self._make_fetch(count_resp, search_resp, calls)
+        m = cc.inventory_enforcement_ratio(fetch)
+        self.assertEqual(m["value"], 0.05)
+        self.assertIn("5/100", m["display"])
+
+    def test_top_level_list_still_works(self):
+        # Regression: if a SaaS tenant returns a top-level list (the old
+        # SaaS-canonical shape), _require_list still extracts it.
+        count_resp = {"status": 200, "data": {"count": 200}}
+        search_resp = {"status": 200, "data": [{"ip": f"10.0.0.{i}"} for i in range(20)]}
+        calls = []
+        fetch = self._make_fetch(count_resp, search_resp, calls)
+        m = cc.inventory_enforcement_ratio(fetch)
+        self.assertEqual(m["value"], 0.1)  # 20/200
+
+    def test_truncation_sentinel_fires_at_limit(self):
+        # If len(results) exactly equals the limit, we can't trust the count.
+        # Emit Indeterminate with an actionable reason.
+        count_resp = {"status": 200, "data": {"count": 1000000}}
+        search_resp = {"status": 200, "data": {
+            "results": [{"ip": f"10.0.0.{i}"} for i in range(self.LIMIT)]
+        }}
+        calls = []
+        fetch = self._make_fetch(count_resp, search_resp, calls)
+        m = cc.inventory_enforcement_ratio(fetch)
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("limit may have truncated", m["reason"])
+        self.assertIn("/inventory/search", m["reason"])
+
+    def test_non_envelope_dict_is_indeterminate(self):
+        # 200 with a dict that has no 'results' key → existing _require_list
+        # Indeterminate path.
+        count_resp = {"status": 200, "data": {"count": 100}}
+        search_resp = {"status": 200, "data": {"foo": "bar"}}
+        calls = []
+        fetch = self._make_fetch(count_resp, search_resp, calls)
+        m = cc.inventory_enforcement_ratio(fetch)
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("expected a list", m["reason"])
+
+    def test_count_side_unchanged(self):
+        # Regression: the /inventory/count call still goes via GET (the
+        # PATH_ALIASES rewrite is in the helper, not visible in the runner's
+        # primitive). The runner sends method='GET'; the helper handles rewrite.
+        count_resp = {"status": 200, "data": {"count": 50}}
+        search_resp = {"status": 200, "data": {"results": []}}
+        calls = []
+        fetch = self._make_fetch(count_resp, search_resp, calls)
+        cc.inventory_enforcement_ratio(fetch)
+        count_calls = [c for c in calls if "/inventory/count" in c[1]]
+        self.assertEqual(len(count_calls), 1)
+        self.assertEqual(count_calls[0][0], "GET")
+
+
 if __name__ == "__main__":
     unittest.main()
