@@ -190,15 +190,36 @@ def inventory_enforcement_ratio(fetch, scope=None):
     if bad:
         return bad
     spath = "/openapi/v1/inventory/search"
+    # PR #8: on-prem Tetration 4.0.x returns {"results": [...]} envelope with
+    # no total_count field, so we use a high limit + len(results) instead of
+    # _require_number(... "total_count"). _require_list (PR #7) accepts both
+    # top-level lists (legacy/SaaS) and envelopes. 50000 is the cluster's
+    # hard cap on this version ("limit must be 50,000 or less" returned as
+    # HTTP 400 above that); discovered during PR #8 T4 live acceptance.
+    # Truncation sentinel below catches the rare case where the actual count
+    # equals the cap.
+    SEARCH_LIMIT = 50000
     body = {"filter": {"type": "eq", "field": "enforcement_status", "value": "enabled"},
-            "dimensions": ["ip"], "limit": 0}
+            "dimensions": ["ip"], "limit": SEARCH_LIMIT}
     sresp = fetch("POST", spath, body)
     bad = _indet_if_bad(sresp, spath)
     if bad:
         return bad
-    enforcing, bad = _require_number(sresp, "total_count", spath)
+    results, bad = _require_list(sresp, spath)
     if bad:
         return bad
+    enforcing = len(results)
+    if enforcing == SEARCH_LIMIT:
+        # Edge case: cluster has >= 100k enforcing workloads. Can't distinguish
+        # exact match from truncation. Operator-visible Indeterminate with
+        # actionable pointer to switch to /inventory/stats endpoint.
+        return measurement(
+            indeterminate=True,
+            reason=(f"{spath}: returned exactly {SEARCH_LIMIT} results — limit "
+                    f"may have truncated; cluster has >= {SEARCH_LIMIT} enforcing "
+                    f"workloads (rare). Switch to /inventory/stats endpoint if "
+                    f"this recurs."),
+        )
     return _ratio(enforcing, total, "workloads enforcing")
 
 

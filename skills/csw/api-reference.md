@@ -21,6 +21,8 @@ Base path: `/openapi/v1`
 
 **Scope object fields**: `id`, `short_name`, `name` (full path), `description`, `short_query`, `query`, `parent_app_scope_id`, `child_app_scope_ids`, `vrf_id`, `filter_type`, `dirty`, `dirty_short_query`
 
+> **On-prem 4.0.x:** `/openapi/v1/scopes` is renamed to `/openapi/v1/app_scopes`. The helper rewrites GET→GET transparently when `CSW_DEPLOYMENT=selfhosted`. See "API surface variants" in `SKILL.md`.
+
 ## Inventory Filters
 
 | Method | Path | Description | Deploy |
@@ -100,7 +102,11 @@ Nested example:
 | POST | `/inventory/stats` | Inventory statistics | B |
 | GET | `/inventory/count` | Total inventory count | B |
 
-> **On-prem 4.0.x:** `/inventory/dimensions` uses `GET` (no body), not `POST`. If `POST` returns 405, retry as `GET`. See "API surface variants" in `SKILL.md`.
+> **On-prem 4.0.x:**
+> - `/inventory/dimensions` uses `GET` (no body), not `POST`. If `POST` returns 405, retry as `GET`.
+> - `/inventory/count` uses `POST` with `{}` body, not `GET`. The helper rewrites GET→POST and injects empty body transparently on `CSW_DEPLOYMENT=selfhosted`.
+> - `/inventory/search` returns `{"results": [...]}` envelope and does NOT include a `total_count` field; use `len(results)` with a high `limit` for count queries.
+> - See "API surface variants" in `SKILL.md`.
 
 **Search body**:
 ```json
@@ -165,6 +171,7 @@ Nested example:
 > - Verb mapping: `POST /openapi/v1/flowsearch` (search), `POST /openapi/v1/flowsearch/topn` (top-N), `GET /openapi/v1/flowsearch/dimensions` (note GET, not POST), `GET /openapi/v1/flowsearch/metrics`.
 > - Request body MUST include `"scopeName": "<root-scope-name>"` — the cluster will not infer a tenant. Common values: `"Default"`, `"Tetration"` (the cluster's own management scope, where you'll find internal cluster-services traffic), or a customer-named root scope. Returns `400 "scopeName is a required field"` if missing.
 > - On the `aggregated_flows` datasource, the `fwd_*` / `rev_*` metric fields may return zero; the live volumetric metric is `bandwidth_bytes_per_second` (no direction prefix). Request it explicitly if `fwd_byte_count` / `rev_byte_count` come back empty.
+> - `t0` and `t1` must be epoch integer, ISO 8601, or RFC 3339 formatted strings. The SaaS-friendly relative formats (`"-86400s"`, `"now"`) are rejected with HTTP 400. The `flow_visibility_present` primitive in `bin/csw_compliance.py` generates ISO 8601 timestamps at call time (PR #7 fix).
 
 **Flow search body**:
 ```json
