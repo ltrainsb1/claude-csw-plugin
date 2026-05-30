@@ -219,6 +219,13 @@ def agent_coverage(fetch, scope=None):
 def flow_visibility_present(fetch, scope=None):
     path = "/openapi/v1/flow_search/flows"
     body = {"t0": "-86400s", "t1": "now", "filter": {}, "limit": 1}
+    # On multi-tenant on-prem Tetration, scopeName is a required body field.
+    # The runner plumbs `scope` through from argv[2]; inject it when provided.
+    # If missing on self-hosted, cluster returns 400 -> _indet_if_bad surfaces
+    # it as Indeterminate with the HTTP code (per PR #7 pre-flight decision:
+    # no silent env-var fallback).
+    if scope:
+        body["scopeName"] = scope
     resp = fetch("POST", path, body)
     bad = _indet_if_bad(resp, path)
     if bad:

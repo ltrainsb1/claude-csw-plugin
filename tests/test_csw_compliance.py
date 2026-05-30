@@ -257,6 +257,68 @@ class TestRender(unittest.TestCase):
         self.assertIn("12.1", md)  # not-evidenceable row is shown
 
 
+class TestFlowVisibilityScopeName(unittest.TestCase):
+    """PR #7 — scopeName injection on selfhosted multi-tenant clusters."""
+
+    def _make_fetch(self, recorded_calls):
+        """Returns a fake fetcher that records call args and returns
+        a hardcoded flow_search response."""
+        def _fetch(method, path, body=None):
+            recorded_calls.append((method, path, body))
+            return {
+                "status": 200,
+                "data": {"results": [{"src_address": "10.0.0.1"}]},
+            }
+        return _fetch
+
+    def test_scope_provided_injects_scopeName(self):
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope="Tetration")
+        self.assertEqual(len(calls), 1)
+        _, _, body = calls[0]
+        self.assertEqual(body.get("scopeName"), "Tetration")
+
+    def test_no_scope_does_not_inject(self):
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope=None)
+        self.assertEqual(len(calls), 1)
+        _, _, body = calls[0]
+        self.assertNotIn("scopeName", body)
+
+    def test_empty_string_scope_does_not_inject(self):
+        # Defensive: falsy scope values shouldn't add an empty scopeName.
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope="")
+        self.assertEqual(len(calls), 1)
+        _, _, body = calls[0]
+        self.assertNotIn("scopeName", body)
+
+    def test_other_body_fields_unchanged(self):
+        # Regression: t0, t1, filter, limit must still be present.
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope="Tetration")
+        _, _, body = calls[0]
+        self.assertEqual(body.get("t0"), "-86400s")
+        self.assertEqual(body.get("t1"), "now")
+        self.assertEqual(body.get("filter"), {})
+        self.assertEqual(body.get("limit"), 1)
+
+    def test_400_from_cluster_surfaces_as_indeterminate(self):
+        # When the cluster rejects the missing-scopeName request, the existing
+        # _indet_if_bad path makes the failure operator-visible.
+        def _fetch(method, path, body=None):
+            return {"status": 400, "error": "scopeName is a required field",
+                    "data": None}
+        m = cc.flow_visibility_present(_fetch, scope=None)
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("400", m["reason"])
+        self.assertIn("/openapi/v1/flow_search/flows", m["reason"])
+
+
 class TestRequireListEnvelope(unittest.TestCase):
     """Envelope shape support added in PR #7 — Tetration 4.0.x clusters
     return {"results": [...]} on /sensors etc. instead of a top-level list."""
