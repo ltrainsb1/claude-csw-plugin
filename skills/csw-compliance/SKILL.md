@@ -23,7 +23,7 @@ echo "URL: ${CSW_API_URL:-NOT SET}" && echo "KEY: ${CSW_API_KEY:+SET}" && echo "
 
 **Deployment models.** This skill works against both Cisco-hosted SaaS tenants and customer-managed self-hosted clusters. The helper auto-detects on first call (`CSW_DEPLOYMENT=auto`, default); set `CSW_DEPLOYMENT=saas|selfhosted` to skip the probe.
 
-**What differs for this skill specifically:** none — every endpoint used by the compliance runner (`bin/csw_compliance.py`) is available on both deployments.
+**What differs for this skill specifically:** the compliance runner transparently handles four on-prem 4.0.x drifts via PR #6/#7 fixes: `/scopes`→`/app_scopes` and `/inventory/count` GET→POST (via helper PATH_ALIASES), `/sensors` and `/inventory/search` `{"results": [...]}` envelope shapes (via runner-side `_require_list`), and `/flow_search/flows` `scopeName` body field + ISO 8601 timestamps (via the `flow_visibility_present` primitive). See "API surface variants (Tetration version drift)" in `skills/csw/SKILL.md` for the full catalog. The runner is expected to produce non-Indeterminate scores on both SaaS and self-hosted Tetration 4.0.x clusters.
 
 ## Read-only discipline (Iron Law)
 
