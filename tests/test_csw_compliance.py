@@ -257,5 +257,121 @@ class TestRender(unittest.TestCase):
         self.assertIn("12.1", md)  # not-evidenceable row is shown
 
 
+class TestFlowVisibilityScopeName(unittest.TestCase):
+    """PR #7 — scopeName injection on selfhosted multi-tenant clusters."""
+
+    def _make_fetch(self, recorded_calls):
+        """Returns a fake fetcher that records call args and returns
+        a hardcoded flow_search response."""
+        def _fetch(method, path, body=None):
+            recorded_calls.append((method, path, body))
+            return {
+                "status": 200,
+                "data": {"results": [{"src_address": "10.0.0.1"}]},
+            }
+        return _fetch
+
+    def test_scope_provided_injects_scopeName(self):
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope="Tetration")
+        self.assertEqual(len(calls), 1)
+        _, _, body = calls[0]
+        self.assertEqual(body.get("scopeName"), "Tetration")
+
+    def test_no_scope_does_not_inject(self):
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope=None)
+        self.assertEqual(len(calls), 1)
+        _, _, body = calls[0]
+        self.assertNotIn("scopeName", body)
+
+    def test_empty_string_scope_does_not_inject(self):
+        # Defensive: falsy scope values shouldn't add an empty scopeName.
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope="")
+        self.assertEqual(len(calls), 1)
+        _, _, body = calls[0]
+        self.assertNotIn("scopeName", body)
+
+    def test_other_body_fields_unchanged(self):
+        # Regression: filter, limit must still be present. t0/t1 changed to
+        # ISO 8601 format during PR #7 execution discovery — on-prem 4.0.x
+        # rejects the SaaS-friendly "-86400s"/"now" relative format.
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope="Tetration")
+        _, _, body = calls[0]
+        # t0/t1 are now ISO 8601 strings ending in 'Z'
+        self.assertIsInstance(body.get("t0"), str)
+        self.assertTrue(body["t0"].endswith("Z"))
+        self.assertIsInstance(body.get("t1"), str)
+        self.assertTrue(body["t1"].endswith("Z"))
+        self.assertEqual(body.get("filter"), {})
+        self.assertEqual(body.get("limit"), 1)
+
+    def test_t0_t1_are_iso_8601_24h_window(self):
+        # The window should be ~24h: t1 = now, t0 = now - 86400s.
+        from datetime import datetime, timezone
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope="Tetration")
+        _, _, body = calls[0]
+        t0 = datetime.strptime(body["t0"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        t1 = datetime.strptime(body["t1"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        diff = (t1 - t0).total_seconds()
+        self.assertAlmostEqual(diff, 86400, delta=10)  # 24h ± 10s for execution time
+
+    def test_400_from_cluster_surfaces_as_indeterminate(self):
+        # When the cluster rejects the missing-scopeName request, the existing
+        # _indet_if_bad path makes the failure operator-visible.
+        def _fetch(method, path, body=None):
+            return {"status": 400, "error": "scopeName is a required field",
+                    "data": None}
+        m = cc.flow_visibility_present(_fetch, scope=None)
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("400", m["reason"])
+        self.assertIn("/openapi/v1/flow_search/flows", m["reason"])
+
+
+class TestRequireListEnvelope(unittest.TestCase):
+    """Envelope shape support added in PR #7 — Tetration 4.0.x clusters
+    return {"results": [...]} on /sensors etc. instead of a top-level list."""
+
+    def test_top_level_list_still_works(self):
+        # Regression: pre-existing shape must still pass through unchanged.
+        resp = {"status": 200, "data": [{"id": "a"}, {"id": "b"}]}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(bad)
+        self.assertEqual(items, [{"id": "a"}, {"id": "b"}])
+
+    def test_envelope_with_results_key(self):
+        resp = {"status": 200, "data": {"results": [{"uuid": "x"}, {"uuid": "y"}]}}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(bad)
+        self.assertEqual(items, [{"uuid": "x"}, {"uuid": "y"}])
+
+    def test_empty_envelope_returns_empty_list(self):
+        resp = {"status": 200, "data": {"results": []}}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(bad)
+        self.assertEqual(items, [])
+
+    def test_dict_without_results_key_is_indeterminate(self):
+        resp = {"status": 200, "data": {"foo": "bar"}}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(items)
+        self.assertTrue(bad["indeterminate"])
+        self.assertIn("expected a list or", bad["reason"])
+
+    def test_results_key_with_non_list_value_is_indeterminate(self):
+        resp = {"status": 200, "data": {"results": "not a list"}}
+        items, bad = cc._require_list(resp, "/openapi/v1/sensors")
+        self.assertIsNone(items)
+        self.assertTrue(bad["indeterminate"])
+
+
 if __name__ == "__main__":
     unittest.main()

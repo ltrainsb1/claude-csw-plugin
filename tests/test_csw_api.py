@@ -582,13 +582,29 @@ class TestAliasEndpoint(unittest.TestCase):
         )
         self.assertEqual(result, ("GET", "/openapi/v1/inventory/dimensions?foo=bar"))
 
+    def test_selfhosted_get_path_rename(self):
+        result = csw_api._alias_endpoint("GET", "/openapi/v1/scopes", "selfhosted")
+        self.assertEqual(result, ("GET", "/openapi/v1/app_scopes"))
+
+    def test_saas_get_path_rename_unchanged(self):
+        result = csw_api._alias_endpoint("GET", "/openapi/v1/scopes", "saas")
+        self.assertEqual(result, ("GET", "/openapi/v1/scopes"))
+
+    def test_get_path_rename_preserves_query_string(self):
+        result = csw_api._alias_endpoint("GET", "/openapi/v1/scopes?limit=10", "selfhosted")
+        self.assertEqual(result, ("GET", "/openapi/v1/app_scopes?limit=10"))
+
+    def test_selfhosted_get_to_post_verb_change(self):
+        result = csw_api._alias_endpoint("GET", "/openapi/v1/inventory/count", "selfhosted")
+        self.assertEqual(result, ("POST", "/openapi/v1/inventory/count"))
+
 
 class TestPathAliasesStructure(unittest.TestCase):
     def test_constant_exists_and_is_list(self):
         self.assertIsInstance(csw_api.PATH_ALIASES, list)
 
-    def test_has_exactly_5_rows(self):
-        self.assertEqual(len(csw_api.PATH_ALIASES), 5)
+    def test_has_exactly_7_rows(self):
+        self.assertEqual(len(csw_api.PATH_ALIASES), 7)
 
     def test_every_row_is_4_tuple_of_strings(self):
         for row in csw_api.PATH_ALIASES:
@@ -602,18 +618,75 @@ class TestPathAliasesStructure(unittest.TestCase):
             self.assertIn(canonical_method, valid)
             self.assertIn(alt_method, valid)
 
-    def test_contains_the_five_documented_rows(self):
-        # Each row from the design doc / PR #5 catalog (with PR #5
-        # catalog amendment in T6 adding the metrics row).
+    def test_contains_the_seven_documented_rows(self):
+        # 5 rows from PR #6 + 2 new from PR #7 (T1 /scopes, T2 /inventory/count).
         expected = {
             ("POST", "/openapi/v1/flow_search/flows",      "POST", "/openapi/v1/flowsearch"),
             ("POST", "/openapi/v1/flow_search/topn",       "POST", "/openapi/v1/flowsearch/topn"),
             ("POST", "/openapi/v1/flow_search/metrics",    "GET",  "/openapi/v1/flowsearch/metrics"),
             ("POST", "/openapi/v1/flow_search/dimensions", "GET",  "/openapi/v1/flowsearch/dimensions"),
             ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
+            ("GET",  "/openapi/v1/scopes",                 "GET",  "/openapi/v1/app_scopes"),
+            ("GET",  "/openapi/v1/inventory/count",        "POST", "/openapi/v1/inventory/count"),
         }
         actual = {tuple(row) for row in csw_api.PATH_ALIASES}
         self.assertEqual(actual, expected)
+
+
+class TestGetPostBodyInject(unittest.TestCase):
+    def setUp(self):
+        os.environ["CSW_API_URL"] = "https://example.invalid"
+        os.environ["CSW_API_KEY"] = "deadbeef"
+        os.environ["CSW_API_SECRET"] = "cafebabe"
+        os.environ["CSW_DEPLOYMENT"] = "selfhosted"
+
+    def tearDown(self):
+        for k in ("CSW_API_URL", "CSW_API_KEY", "CSW_API_SECRET", "CSW_DEPLOYMENT"):
+            os.environ.pop(k, None)
+
+    def _capture_stderr(self):
+        import io, contextlib
+        buf = io.StringIO()
+        return buf, contextlib.redirect_stderr(buf)
+
+    def test_get_to_post_with_no_body_emits_inject_note(self):
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("GET", "/openapi/v1/inventory/count")
+        err = buf.getvalue()
+        self.assertIn("rewriting", err)
+        self.assertIn("injecting empty body", err)
+        self.assertIn("/openapi/v1/inventory/count", err)
+
+    def test_get_to_post_with_caller_body_preserves_body(self):
+        # Defensive: if caller provided a body (unusual for GET but valid),
+        # don't clobber it. No inject note.
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("GET", "/openapi/v1/inventory/count", body={"x": 1})
+        err = buf.getvalue()
+        self.assertIn("rewriting", err)
+        self.assertNotIn("injecting empty body", err)
+
+    def test_post_to_get_drop_path_unaffected(self):
+        # Regression: PR #6's body-DROP must still fire on the dimensions alias.
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request(
+                "POST", "/openapi/v1/inventory/dimensions", body={"foo": "bar"}
+            )
+        err = buf.getvalue()
+        self.assertIn("dropping POST body", err)
+        self.assertNotIn("injecting empty body", err)
+
+    def test_path_rename_only_get_to_get_no_inject(self):
+        # Regression: T1's /scopes row is GET→GET, no verb change. No inject.
+        buf, redirect = self._capture_stderr()
+        with redirect:
+            csw_api.make_request("GET", "/openapi/v1/scopes")
+        err = buf.getvalue()
+        self.assertIn("rewriting", err)
+        self.assertNotIn("injecting empty body", err)
 
 
 if __name__ == "__main__":

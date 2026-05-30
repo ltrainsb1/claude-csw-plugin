@@ -137,13 +137,19 @@ def _ratio(numerator, denominator, label):
 
 def _require_list(resp, path):
     """For list endpoints. resp has already passed _indet_if_bad (HTTP 200).
-    Returns (list, None) or (None, indeterminate-measurement) if the 200 body
-    is not a list — never coerce an unexpected shape into an empty list."""
+    Accepts EITHER a top-level list OR an envelope {"results": [...]}
+    (Tetration 4.0.x pagination shape on /sensors, etc.). Never coerces
+    unexpected shapes into an empty list."""
     data = resp.get("data")
-    if not isinstance(data, list):
-        return None, measurement(indeterminate=True,
-                                 reason=f"{path}: 200 but expected a list, got {type(data).__name__}")
-    return data, None
+    if isinstance(data, list):
+        return data, None
+    if isinstance(data, dict) and isinstance(data.get("results"), list):
+        return data["results"], None
+    return None, measurement(
+        indeterminate=True,
+        reason=f"{path}: 200 but expected a list or {{results: [...]}}, "
+               f"got {type(data).__name__}",
+    )
 
 
 def _require_number(resp, key, path):
@@ -211,8 +217,26 @@ def agent_coverage(fetch, scope=None):
 
 
 def flow_visibility_present(fetch, scope=None):
+    from datetime import datetime, timezone, timedelta
     path = "/openapi/v1/flow_search/flows"
-    body = {"t0": "-86400s", "t1": "now", "filter": {}, "limit": 1}
+    # ISO 8601 timestamps for a 24h window. On-prem Tetration 4.0.x rejects
+    # the relative "-86400s"/"now" format with HTTP 400 "t0 must be a epoch
+    # integer, ISO 8601, or RFC 3339" — discovered during PR #7 T5 acceptance.
+    t1_dt = datetime.now(timezone.utc)
+    t0_dt = t1_dt - timedelta(seconds=86400)
+    body = {
+        "t0": t0_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "t1": t1_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "filter": {},
+        "limit": 1,
+    }
+    # On multi-tenant on-prem Tetration, scopeName is a required body field.
+    # The runner plumbs `scope` through from argv[2]; inject it when provided.
+    # If missing on self-hosted, cluster returns 400 -> _indet_if_bad surfaces
+    # it as Indeterminate with the HTTP code (per PR #7 pre-flight decision:
+    # no silent env-var fallback).
+    if scope:
+        body["scopeName"] = scope
     resp = fetch("POST", path, body)
     bad = _indet_if_bad(resp, path)
     if bad:
