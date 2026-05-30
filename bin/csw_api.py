@@ -97,6 +97,9 @@ PATH_ALIASES = [
     ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
     # /scopes path rename — on-prem 4.0.x; verified during PR #7 build.
     ("GET",  "/openapi/v1/scopes",                 "GET",  "/openapi/v1/app_scopes"),
+    # /inventory/count verb change — runner uses GET; on-prem 4.0.x wants POST
+    # with empty body. Body-INJECT branch in make_request handles the empty {}.
+    ("GET",  "/openapi/v1/inventory/count",        "POST", "/openapi/v1/inventory/count"),
 ]
 
 
@@ -314,6 +317,16 @@ def make_request(method, path, body=None, params=None):
                 file=sys.stderr,
             )
             body = None
+        # On GET->POST verb changes with no caller body, inject empty {} —
+        # the alt endpoint requires a POST body even if it's empty. Mirror
+        # of the body-DROP branch above; never clobbers a caller-provided body.
+        elif method.upper() == "GET" and alt_method == "POST" and body is None:
+            print(
+                f"[csw_api] injecting empty body for POST {alt_path} alias "
+                f"(operator: confirm endpoint accepts empty body)",
+                file=sys.stderr,
+            )
+            body = {}
         method = alt_method
         path = alt_path
 
