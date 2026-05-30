@@ -297,15 +297,32 @@ class TestFlowVisibilityScopeName(unittest.TestCase):
         self.assertNotIn("scopeName", body)
 
     def test_other_body_fields_unchanged(self):
-        # Regression: t0, t1, filter, limit must still be present.
+        # Regression: filter, limit must still be present. t0/t1 changed to
+        # ISO 8601 format during PR #7 execution discovery — on-prem 4.0.x
+        # rejects the SaaS-friendly "-86400s"/"now" relative format.
         calls = []
         fetch = self._make_fetch(calls)
         cc.flow_visibility_present(fetch, scope="Tetration")
         _, _, body = calls[0]
-        self.assertEqual(body.get("t0"), "-86400s")
-        self.assertEqual(body.get("t1"), "now")
+        # t0/t1 are now ISO 8601 strings ending in 'Z'
+        self.assertIsInstance(body.get("t0"), str)
+        self.assertTrue(body["t0"].endswith("Z"))
+        self.assertIsInstance(body.get("t1"), str)
+        self.assertTrue(body["t1"].endswith("Z"))
         self.assertEqual(body.get("filter"), {})
         self.assertEqual(body.get("limit"), 1)
+
+    def test_t0_t1_are_iso_8601_24h_window(self):
+        # The window should be ~24h: t1 = now, t0 = now - 86400s.
+        from datetime import datetime, timezone
+        calls = []
+        fetch = self._make_fetch(calls)
+        cc.flow_visibility_present(fetch, scope="Tetration")
+        _, _, body = calls[0]
+        t0 = datetime.strptime(body["t0"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        t1 = datetime.strptime(body["t1"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        diff = (t1 - t0).total_seconds()
+        self.assertAlmostEqual(diff, 86400, delta=10)  # 24h ± 10s for execution time
 
     def test_400_from_cluster_surfaces_as_indeterminate(self):
         # When the cluster rejects the missing-scopeName request, the existing

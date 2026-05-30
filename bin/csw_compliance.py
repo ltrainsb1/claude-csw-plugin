@@ -217,8 +217,19 @@ def agent_coverage(fetch, scope=None):
 
 
 def flow_visibility_present(fetch, scope=None):
+    from datetime import datetime, timezone, timedelta
     path = "/openapi/v1/flow_search/flows"
-    body = {"t0": "-86400s", "t1": "now", "filter": {}, "limit": 1}
+    # ISO 8601 timestamps for a 24h window. On-prem Tetration 4.0.x rejects
+    # the relative "-86400s"/"now" format with HTTP 400 "t0 must be a epoch
+    # integer, ISO 8601, or RFC 3339" — discovered during PR #7 T5 acceptance.
+    t1_dt = datetime.now(timezone.utc)
+    t0_dt = t1_dt - timedelta(seconds=86400)
+    body = {
+        "t0": t0_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "t1": t1_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "filter": {},
+        "limit": 1,
+    }
     # On multi-tenant on-prem Tetration, scopeName is a required body field.
     # The runner plumbs `scope` through from argv[2]; inject it when provided.
     # If missing on self-hosted, cluster returns 400 -> _indet_if_bad surfaces
