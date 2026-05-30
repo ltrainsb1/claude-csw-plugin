@@ -95,6 +95,8 @@ PATH_ALIASES = [
     ("POST", "/openapi/v1/flow_search/metrics",    "GET",  "/openapi/v1/flowsearch/metrics"),
     ("POST", "/openapi/v1/flow_search/dimensions", "GET",  "/openapi/v1/flowsearch/dimensions"),
     ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
+    # /scopes path rename — on-prem 4.0.x; verified during PR #7 build.
+    ("GET",  "/openapi/v1/scopes",                 "GET",  "/openapi/v1/app_scopes"),
 ]
 
 

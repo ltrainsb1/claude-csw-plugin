@@ -36,6 +36,7 @@ echo "URL: ${CSW_API_URL:-NOT SET}" && echo "KEY: ${CSW_API_KEY:+SET}" && echo "
 | `POST /openapi/v1/flow_search/dimensions` | `GET /openapi/v1/flowsearch/dimensions` | 405 on canonical (verb wrong) |
 | `POST /openapi/v1/flow_search/metrics` | `GET /openapi/v1/flowsearch/metrics` | 405 on canonical (verb wrong; documented in api-reference.md on-prem callout) |
 | `POST /openapi/v1/inventory/dimensions` | `GET /openapi/v1/inventory/dimensions` | 405 on canonical (verb wrong) |
+| `GET /openapi/v1/scopes` | `GET /openapi/v1/app_scopes` | 404 on canonical (path renamed on on-prem) |
 | Body: implicit single tenant on SaaS | Body: `"scopeName": "<root-scope-name>"` **required** on `flowsearch` | 400 with `"scopeName is a required field"` |
 | Metric fields `fwd_byte_count` / `rev_byte_count` etc. | `aggregated_flows` datasource on 4.0.x may return zero for those; the live metric is `bandwidth_bytes_per_second` (no fwd/rev) | metrics returned as zero |
 

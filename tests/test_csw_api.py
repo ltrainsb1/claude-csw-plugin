@@ -582,13 +582,25 @@ class TestAliasEndpoint(unittest.TestCase):
         )
         self.assertEqual(result, ("GET", "/openapi/v1/inventory/dimensions?foo=bar"))
 
+    def test_selfhosted_get_path_rename(self):
+        result = csw_api._alias_endpoint("GET", "/openapi/v1/scopes", "selfhosted")
+        self.assertEqual(result, ("GET", "/openapi/v1/app_scopes"))
+
+    def test_saas_get_path_rename_unchanged(self):
+        result = csw_api._alias_endpoint("GET", "/openapi/v1/scopes", "saas")
+        self.assertEqual(result, ("GET", "/openapi/v1/scopes"))
+
+    def test_get_path_rename_preserves_query_string(self):
+        result = csw_api._alias_endpoint("GET", "/openapi/v1/scopes?limit=10", "selfhosted")
+        self.assertEqual(result, ("GET", "/openapi/v1/app_scopes?limit=10"))
+
 
 class TestPathAliasesStructure(unittest.TestCase):
     def test_constant_exists_and_is_list(self):
         self.assertIsInstance(csw_api.PATH_ALIASES, list)
 
-    def test_has_exactly_5_rows(self):
-        self.assertEqual(len(csw_api.PATH_ALIASES), 5)
+    def test_has_exactly_6_rows(self):
+        self.assertEqual(len(csw_api.PATH_ALIASES), 6)
 
     def test_every_row_is_4_tuple_of_strings(self):
         for row in csw_api.PATH_ALIASES:
@@ -602,15 +614,15 @@ class TestPathAliasesStructure(unittest.TestCase):
             self.assertIn(canonical_method, valid)
             self.assertIn(alt_method, valid)
 
-    def test_contains_the_five_documented_rows(self):
-        # Each row from the design doc / PR #5 catalog (with PR #5
-        # catalog amendment in T6 adding the metrics row).
+    def test_contains_the_six_documented_rows(self):
+        # 5 rows from PR #6 + 1 new from PR #7 T1 (/scopes path rename).
         expected = {
             ("POST", "/openapi/v1/flow_search/flows",      "POST", "/openapi/v1/flowsearch"),
             ("POST", "/openapi/v1/flow_search/topn",       "POST", "/openapi/v1/flowsearch/topn"),
             ("POST", "/openapi/v1/flow_search/metrics",    "GET",  "/openapi/v1/flowsearch/metrics"),
             ("POST", "/openapi/v1/flow_search/dimensions", "GET",  "/openapi/v1/flowsearch/dimensions"),
             ("POST", "/openapi/v1/inventory/dimensions",   "GET",  "/openapi/v1/inventory/dimensions"),
+            ("GET",  "/openapi/v1/scopes",                 "GET",  "/openapi/v1/app_scopes"),
         }
         actual = {tuple(row) for row in csw_api.PATH_ALIASES}
         self.assertEqual(actual, expected)
