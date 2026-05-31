@@ -120,12 +120,32 @@ def _validate_verdict_rule(rule, cid, path):
 
 
 def _indet_if_bad(resp, path):
+    """For non-200 responses, return an Indeterminate measurement; for 200
+    return None. PR #10: when Tetration returns a structured error envelope
+    (resp["data"]["error"]) that differs from the helper's generic
+    resp["error"], append it to the reason so the operator sees the actual
+    cluster message instead of a bare HTTP code."""
     s = resp.get("status")
+    if s == 200:
+        return None
+    # Extract the cluster's verbatim error message if it adds detail beyond
+    # the helper's generic resp["error"]. Tetration's structured envelope is
+    # {"data": {"error": "...", "request_context_id": "...", "status": N}}.
+    # Cases handled:
+    #   - dict with "error" differing from outer error → append as ": <msg>"
+    #   - dict with "error" matching outer (e.g., 403 "Forbidden")  → no append
+    #   - empty string / None / other shape (e.g., 404)              → no append
+    detail = ""
+    data = resp.get("data")
+    if isinstance(data, dict):
+        inner = data.get("error")
+        if inner and inner != resp.get("error"):
+            detail = f": {inner}"
     if s in (401, 403):
-        return measurement(indeterminate=True, reason=f"capability missing: {path} (HTTP {s})")
-    if s != 200:
-        return measurement(indeterminate=True, reason=f"{path} returned HTTP {s}")
-    return None
+        return measurement(indeterminate=True,
+                           reason=f"capability missing: {path} (HTTP {s}){detail}")
+    return measurement(indeterminate=True,
+                       reason=f"{path} returned HTTP {s}{detail}")
 
 
 def _ratio(numerator, denominator, label):
