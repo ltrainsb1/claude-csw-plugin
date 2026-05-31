@@ -465,5 +465,90 @@ class TestInventoryEnforcementCount(unittest.TestCase):
         self.assertEqual(count_calls[0][0], "GET")
 
 
+class TestIndetIfBadVerbatim(unittest.TestCase):
+    """PR #10 — _indet_if_bad now surfaces Tetration's structured error
+    message from resp["data"]["error"] when it differs from the helper's
+    generic resp["error"]."""
+
+    def test_400_with_structured_detail_appends_message(self):
+        # Case 1 from design diagnostic: 400 with a useful structured error.
+        # The verbatim message must appear in the reason.
+        resp = {"status": 400, "error": "Bad Request",
+                "data": {"error": "limit must be 50,000 or less",
+                         "request_context_id": "tid=abc;ts=123",
+                         "status": 400}}
+        m = cc._indet_if_bad(resp, "/openapi/v1/inventory/search")
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("HTTP 400", m["reason"])
+        self.assertIn("limit must be 50,000 or less", m["reason"])
+        # request_context_id is internal trace data; must NOT leak.
+        self.assertNotIn("request_context_id", m["reason"])
+
+    def test_403_with_duplicate_message_does_not_duplicate(self):
+        # Case 2 from design diagnostic: 403 envelope often repeats
+        # "Forbidden" — no extra info, no append.
+        resp = {"status": 403, "error": "Forbidden",
+                "data": {"error": "Forbidden",
+                         "request_context_id": "tid=abc",
+                         "status": 403}}
+        m = cc._indet_if_bad(resp, "/openapi/v1/sensors")
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("capability missing", m["reason"])
+        self.assertIn("HTTP 403", m["reason"])
+        # "Forbidden" should appear AT MOST once (the helper's generic
+        # one is acceptable but it shouldn't be appended a second time).
+        self.assertLessEqual(m["reason"].count("Forbidden"), 1)
+
+    def test_404_with_empty_data_no_append(self):
+        # Case 3 from design diagnostic: 404 returns data="" (empty string,
+        # not dict). Must not crash; must not append anything.
+        resp = {"status": 404, "error": "Not Found", "data": ""}
+        m = cc._indet_if_bad(resp, "/openapi/v1/scopes")
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("HTTP 404", m["reason"])
+        # No ": <something>" appended after the HTTP status.
+        self.assertNotIn(":", m["reason"].split("HTTP 404")[-1])
+
+    def test_500_with_dict_no_error_field(self):
+        # Defensive: dict that doesn't have an "error" key must not be
+        # misread (e.g., must not leak random "foo"/"bar" fields).
+        resp = {"status": 500, "error": "Internal Server Error",
+                "data": {"foo": "bar"}}
+        m = cc._indet_if_bad(resp, "/openapi/v1/anywhere")
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("HTTP 500", m["reason"])
+        self.assertNotIn("foo", m["reason"])
+        self.assertNotIn("bar", m["reason"])
+
+    def test_200_still_returns_None(self):
+        # Regression: success path unchanged.
+        resp = {"status": 200, "data": [{"id": "a"}]}
+        m = cc._indet_if_bad(resp, "/openapi/v1/anywhere")
+        self.assertIsNone(m)
+
+    def test_connection_failure_status_0_treated_as_non_200(self):
+        # Helper's URLError path: status=0, error="Connection failed: ...",
+        # data=None. Must produce Indeterminate; must NOT crash on None data.
+        resp = {"status": 0, "error": "Connection failed: name resolution failed",
+                "data": None}
+        m = cc._indet_if_bad(resp, "/openapi/v1/anywhere")
+        self.assertTrue(m["indeterminate"])
+        self.assertIn("HTTP 0", m["reason"])
+
+    def test_existing_substring_assertions_still_hold(self):
+        # Regression meta-test: tests from prior PRs that check for "HTTP 400"
+        # or path substrings must continue to pass. This test pins the
+        # backward-compatibility contract for the reason string format.
+        resp = {"status": 400, "error": "Bad Request",
+                "data": {"error": "scopeName is a required field",
+                         "status": 400}}
+        m = cc._indet_if_bad(resp, "/openapi/v1/flow_search/flows")
+        # Old-format checks (must still pass):
+        self.assertIn("HTTP 400", m["reason"])
+        self.assertIn("/openapi/v1/flow_search/flows", m["reason"])
+        # New-format check (PR #10 addition):
+        self.assertIn("scopeName is a required field", m["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()
