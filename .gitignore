@@ -3,3 +3,4 @@
 __pycache__/
 .claude/settings.local.json
 ai_docs/
+.DS_Store
