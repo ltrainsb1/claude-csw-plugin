@@ -250,5 +250,23 @@ class TestRenderSingle(unittest.TestCase):
         self.assertIn("deny ip any any log", out)
 
 
+class TestRenderSplit(unittest.TestCase):
+    def _ir(self):
+        return {"aces": [{
+            "action": "permit", "proto": "tcp", "ports": [{"op": "eq", "val": 443}],
+            "src": ea.build_addrset(["10.0.0.1"], None, 256),
+            "dst": ea.build_addrset(["10.0.1.1"], None, 256),
+            "priority": 100,
+            "origin": {"policy_id": "p1", "cons_name": "c", "prov_name": "p"},
+        }], "fidelity": [], "has_errors": False}
+
+    def test_emits_in_and_out(self):
+        out = "\n".join(ea.render_split(self._ir(), "ios", "WS"))
+        self.assertIn("CSW_WS_IN", out)
+        self.assertIn("CSW_WS_OUT", out)
+        self.assertIn("established", out)
+        self.assertIn("orientation", out.lower())
+
+
 if __name__ == "__main__":   # repo convention — every test file carries this
     unittest.main()

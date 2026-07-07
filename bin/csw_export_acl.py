@@ -273,3 +273,29 @@ def render_acl(ir, fmt, ws_name, log_denies=False, acl_suffix=""):
     lines.append(FORMATS[fmt]["acl_open"].format(name=acl_name))
     lines += [f" {b}" for b in body]
     return lines
+
+
+def _reverse_ir(ir):
+    """Swap src/dst so the OUT list carries return traffic."""
+    rev = []
+    for ace in ir["aces"]:
+        r = dict(ace, src=ace["dst"], dst=ace["src"])
+        r["origin"] = {"policy_id": ace["origin"]["policy_id"],
+                       "cons_name": ace["origin"]["prov_name"],
+                       "prov_name": ace["origin"]["cons_name"]}
+        rev.append(r)
+    return {"aces": rev, "fidelity": ir["fidelity"], "has_errors": ir.get("has_errors", False)}
+
+
+def render_split(ir, fmt, ws_name, log_denies=False):
+    header = ["! layout=split — verify orientation: _IN applied inbound on the",
+              "! consumer-facing interface, _OUT outbound (return traffic)."]
+    inbound = render_acl(ir, fmt, ws_name, log_denies, acl_suffix="IN")
+    outbound = render_acl(_reverse_ir(ir), fmt, ws_name, log_denies, acl_suffix="OUT")
+    # Reversed TCP permits get 'established' so stateless hardware passes replies.
+    outbound = [ln + " established"
+                if (" permit tcp " in f" {ln} " and "deny ip any any" not in ln
+                    and "access-list" not in ln)
+                else ln
+                for ln in outbound]
+    return header + inbound + [""] + outbound
