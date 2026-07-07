@@ -41,3 +41,52 @@ def parse_l4(l4):
     if lo == hi:
         return proto, [{"op": "eq", "val": lo}]
     return proto, [{"op": "range", "lo": lo, "hi": hi}]
+
+
+def _address_query_cidr(query):
+    """If the query is a single address term, return its CIDR string, else None."""
+    if not isinstance(query, dict):
+        return None
+    field = query.get("field")
+    if field not in ("ip", "address"):
+        return None
+    val = query.get("value")
+    if query.get("type") == "subnet":
+        return val
+    if query.get("type") == "eq" and val is not None:
+        return f"{val}/32" if ":" not in str(val) else f"{val}/128"
+    return None
+
+
+def _addrset(entries, total, large, source, v6_dropped=0, truncated=False):
+    return {"entries": entries, "total": total, "large": large, "source": source,
+            "v6_dropped": v6_dropped, "truncated": truncated}
+
+
+def build_addrset(ips, query, warn_members, search_limit=None):
+    cidr = _address_query_cidr(query)
+    if cidr:
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+            if net.version == 4:  # v6 subnet cannot go in a v4 ACL — fall through
+                return _addrset([net], 1, False, "subnet_query")
+        except ValueError:
+            pass
+    v4, v6 = [], 0
+    for ip in ips:
+        try:
+            net = ipaddress.ip_network(f"{ip}/32" if ":" not in ip else f"{ip}/128",
+                                       strict=False)
+        except ValueError:
+            continue
+        if net.version == 4:
+            v4.append(net)
+        else:
+            v6 += 1
+    truncated = bool(search_limit) and len(ips) >= search_limit
+    total = len(v4)
+    if total == 0:
+        return _addrset([], 0, False, "empty", v6_dropped=v6, truncated=truncated)
+    entries = list(ipaddress.collapse_addresses(v4))
+    return _addrset(entries, total, total > warn_members, "expanded",
+                    v6_dropped=v6, truncated=truncated)
