@@ -286,5 +286,47 @@ class TestHeaderFidelity(unittest.TestCase):
         self.assertIn("a note", out)
 
 
+class TestExportAcl(unittest.TestCase):
+    def _routes(self):
+        return {
+            ("GET", "/openapi/v1/applications"):
+                {"status": 200, "data": [{"id": "42", "name": "prod",
+                 "latest_adm_version": 7, "app_scope_id": "s1"}]},
+            ("GET", "/openapi/v1/applications/42/policies?version=7"):
+                {"status": 200, "data": [
+                    {"id": "p1", "consumer_filter_id": "C", "provider_filter_id": "P",
+                     "action": "ALLOW", "priority": 100,
+                     "l4_params": [{"proto": 6, "port": [443, 443]}]}]},
+            ("GET", "/openapi/v1/inventory_filters/C"):
+                {"status": 200, "data": {"id": "C", "name": "cons",
+                 "query": {"type": "subnet", "field": "ip", "value": "10.0.0.0/24"}}},
+            ("GET", "/openapi/v1/inventory_filters/P"):
+                {"status": 200, "data": {"id": "P", "name": "prov",
+                 "query": {"type": "eq", "field": "ip", "value": "10.0.1.5"}}},
+        }
+
+    def test_happy_path(self):
+        text, code = ea.export_acl(fake_fetch(self._routes()), "prod", "ios", "single",
+                                   256, False, None, "https://c", "2026-07-07T00:00:00Z")
+        self.assertEqual(code, 0)
+        self.assertIn("permit tcp 10.0.0.0 0.0.0.255 host 10.0.1.5 eq 443", text)
+        self.assertIn("workspace: prod (id 42)", text)
+
+    def test_workspace_not_found(self):
+        text, code = ea.export_acl(fake_fetch({("GET", "/openapi/v1/applications"):
+                                   {"status": 200, "data": []}}),
+                                   "ghost", "ios", "single", 256, False, None, "c", "t")
+        self.assertEqual(code, 2)
+        self.assertIn("ERROR", text)
+
+    def test_unreadable_filter_nonzero_exit(self):
+        routes = self._routes()
+        del routes[("GET", "/openapi/v1/inventory_filters/P")]
+        text, code = ea.export_acl(fake_fetch(routes), "prod", "ios", "single",
+                                   256, False, None, "c", "t")
+        self.assertEqual(code, 1)
+        self.assertIn("FIDELITY NOTES", text)
+
+
 if __name__ == "__main__":   # repo convention — every test file carries this
     unittest.main()

@@ -323,3 +323,56 @@ def render_fidelity(notes):
     else:
         out += [f"! - {n}" for n in notes]
     return out
+
+
+def _find_workspace(fetch, ws_query):
+    got = fetch("GET", "/openapi/v1/applications")
+    if got.get("status") != 200 or not isinstance(got.get("data"), list):
+        return None
+    for app in got["data"]:
+        if str(app.get("id")) == str(ws_query) or app.get("name") == ws_query:
+            return app
+    return None
+
+
+def export_acl(fetch, ws_query, fmt, layout, warn_members, log_denies,
+               version, cluster_url, now_iso):
+    if fmt not in FORMATS:
+        return f"! ERROR: unknown format {fmt!r} (choose nxos|ios-xr|ios)", 2
+    ws = _find_workspace(fetch, ws_query)
+    if ws is None:
+        return f"! ERROR: workspace {ws_query!r} not found", 2
+    ws_id = ws.get("id")
+    ver = version if version is not None else ws.get("latest_adm_version")
+    path = f"/openapi/v1/applications/{ws_id}/policies"
+    if ver is not None:
+        path += f"?version={ver}"
+    pres = fetch("GET", path)
+    policies = pres.get("data") if pres.get("status") == 200 else None
+    if not isinstance(policies, list):
+        return f"! ERROR: could not read policies for workspace {ws.get('name')}", 2
+
+    # Resolve every unique filter id once.
+    ids = set()
+    for p in policies:
+        ids.add(p.get("consumer_filter_id"))
+        ids.add(p.get("provider_filter_id"))
+    resolved = {fid: resolve_filter(fetch, fid, warn_members)
+                for fid in ids if fid is not None}
+
+    ir = build_ir(policies, resolved)
+    if layout == "split":
+        body = render_split(ir, fmt, ws.get("name", str(ws_id)), log_denies)
+    else:
+        body = render_acl(ir, fmt, ws.get("name", str(ws_id)), log_denies)
+
+    host_count = sum(r["addrset"]["total"] for r in resolved.values())
+    header = render_header(ws.get("name", ""), ws_id, ver, cluster_url, fmt, layout,
+                           now_iso, ace_count=len(ir["aces"]), host_count=host_count)
+    fid = render_fidelity(ir["fidelity"])
+    text = "\n".join(header + [""] + body + [""] + fid) + "\n"
+    # Non-zero exit on any hard error: skipped policy (unreadable filter) or a
+    # truncated (INCOMPLETE) filter expansion. IPv6 drops / empty filters are
+    # lossy notes, not errors — they do not fail the run.
+    exit_code = 1 if ir["has_errors"] else 0
+    return text, exit_code
