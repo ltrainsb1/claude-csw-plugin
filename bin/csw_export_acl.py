@@ -90,3 +90,53 @@ def build_addrset(ips, query, warn_members, search_limit=None):
     entries = list(ipaddress.collapse_addresses(v4))
     return _addrset(entries, total, total > warn_members, "expanded",
                     v6_dropped=v6, truncated=truncated)
+
+
+# Cluster hard cap on inventory/search limit ("limit must be 50,000 or less").
+# Mirrors bin/csw_compliance.py:216-221. A full-cap result is treated as
+# possibly-truncated rather than silently complete (pre-flight #1).
+SEARCH_LIMIT = 50000
+
+
+def _extract_ips(data):
+    """Accept a bare list or a {'results': [...]} envelope of inventory rows."""
+    rows = data.get("results", []) if isinstance(data, dict) else data
+    ips = []
+    if isinstance(rows, list):
+        for row in rows:
+            ip = row.get("ip") if isinstance(row, dict) else None
+            if ip:
+                ips.append(ip)
+    return ips
+
+
+def resolve_filter(fetch, filter_id, warn_members):
+    got = fetch("GET", f"/openapi/v1/inventory_filters/{filter_id}")
+    fdata = (got["data"] if got.get("status") == 200
+             and isinstance(got.get("data"), dict) else None)
+    if fdata is None:
+        # Fall back: the id may be a scope, not an inventory filter (pre-flight #2).
+        sc = fetch("GET", f"/openapi/v1/scopes/{filter_id}")
+        if sc.get("status") == 200 and isinstance(sc.get("data"), dict):
+            fdata = sc["data"]
+    if fdata is None:
+        return {"id": filter_id, "name": filter_id,
+                "addrset": build_addrset([], None, warn_members),
+                "error": (f"id {filter_id} is neither an inventory filter nor a "
+                          f"scope (may be an ADM cluster) — not exportable in v1")}
+    query = fdata.get("query")
+    name = fdata.get("name", filter_id)
+    # Address-only queries short-circuit — no inventory call needed.
+    if _address_query_cidr(query):
+        return {"id": filter_id, "name": name,
+                "addrset": build_addrset([], query, warn_members), "error": None}
+    body = {"filter": query, "dimensions": ["ip"], "limit": SEARCH_LIMIT}
+    res = fetch("POST", "/openapi/v1/inventory/search", body)
+    if res.get("status") != 200:
+        return {"id": filter_id, "name": name,
+                "addrset": build_addrset([], None, warn_members),
+                "error": f"inventory search failed for {name} (status {res.get('status')})"}
+    ips = _extract_ips(res.get("data"))
+    return {"id": filter_id, "name": name,
+            "addrset": build_addrset(ips, query, warn_members, search_limit=SEARCH_LIMIT),
+            "error": None}

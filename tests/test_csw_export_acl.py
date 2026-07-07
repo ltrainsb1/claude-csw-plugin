@@ -79,5 +79,61 @@ class TestAddrSet(unittest.TestCase):
         self.assertFalse(b["truncated"])
 
 
+class TestResolveFilter(unittest.TestCase):
+    def test_resolves_and_expands(self):
+        routes = {
+            ("GET", "/openapi/v1/inventory_filters/F1"):
+                {"status": 200, "data": {"id": "F1", "name": "prod-web",
+                 "query": {"type": "eq", "field": "os", "value": "linux"}}},
+            ("POST", "/openapi/v1/inventory/search"):
+                {"status": 200, "data": {"results": [{"ip": "10.10.0.1"}, {"ip": "10.10.0.2"}]}},
+        }
+        r = ea.resolve_filter(fake_fetch(routes), "F1", warn_members=256)
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["name"], "prod-web")
+        self.assertEqual(r["addrset"]["total"], 2)
+
+    def test_bare_list_envelope(self):
+        routes = {
+            ("GET", "/openapi/v1/inventory_filters/F2"):
+                {"status": 200, "data": {"id": "F2", "name": "n",
+                 "query": {"type": "eq", "field": "os", "value": "linux"}}},
+            ("POST", "/openapi/v1/inventory/search"):
+                {"status": 200, "data": [{"ip": "10.0.0.9"}]},
+        }
+        r = ea.resolve_filter(fake_fetch(routes), "F2", warn_members=256)
+        self.assertEqual(r["addrset"]["total"], 1)
+
+    def test_filter_unreadable(self):
+        r = ea.resolve_filter(fake_fetch({}), "F9", warn_members=256)
+        self.assertIsNotNone(r["error"])
+        self.assertEqual(r["addrset"]["source"], "empty")
+
+    def test_scope_fallback(self):
+        # inventory_filters/{id} 404s, but the id is a scope carrying a query.
+        routes = {
+            ("GET", "/openapi/v1/scopes/S1"):
+                {"status": 200, "data": {"id": "S1", "name": "prod-scope",
+                 "query": {"type": "subnet", "field": "ip", "value": "10.9.0.0/16"}}},
+        }
+        r = ea.resolve_filter(fake_fetch(routes), "S1", warn_members=256)
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["name"], "prod-scope")
+        self.assertEqual([str(e) for e in r["addrset"]["entries"]], ["10.9.0.0/16"])
+
+    def test_truncation_flagged(self):
+        many = [{"ip": f"10.{i // 65536}.{(i // 256) % 256}.{i % 256}"}
+                for i in range(ea.SEARCH_LIMIT)]
+        routes = {
+            ("GET", "/openapi/v1/inventory_filters/F"):
+                {"status": 200, "data": {"id": "F", "name": "big",
+                 "query": {"type": "eq", "field": "os", "value": "linux"}}},
+            ("POST", "/openapi/v1/inventory/search"):
+                {"status": 200, "data": {"results": many}},
+        }
+        r = ea.resolve_filter(fake_fetch(routes), "F", warn_members=256)
+        self.assertTrue(r["addrset"]["truncated"])
+
+
 if __name__ == "__main__":   # repo convention — every test file carries this
     unittest.main()
