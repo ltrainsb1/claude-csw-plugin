@@ -211,3 +211,65 @@ def render_ports(ports):
     if p["op"] == "eq":
         return f"eq {p['val']}"
     return f"range {p['lo']} {p['hi']}"
+
+
+def _group_name(ws_name, filter_name, side):
+    return f"CSW_{sanitize_name(ws_name)}_{side}_{sanitize_name(filter_name)}"[:MAX_NAME]
+
+
+def _emit_group(fmt, gname, addrset):
+    """Object-group declaration lines for NX-OS / IOS-XR."""
+    if fmt == "nxos":
+        lines = [f"object-group ip address {gname}"]
+    else:  # ios-xr
+        lines = [f"object-group network ipv4 {gname}"]
+    lines += [f"  {e.network_address}/{e.prefixlen}" for e in addrset["entries"]]
+    return lines
+
+
+def _addr_terms(fmt, ws_name, addrset, filter_name, side, groups):
+    """Return the list of address-term strings for one ACE side. With
+    object-group support and >1 entry, a single 'addrgroup NAME' term is
+    returned and the group is registered in `groups`."""
+    if not addrset["entries"]:
+        return ["any"]
+    if FORMATS[fmt]["objgroup"] and len(addrset["entries"]) > 1:
+        gname = _group_name(ws_name, filter_name, side)
+        if gname not in groups:
+            groups[gname] = _emit_group(fmt, gname, addrset)
+        term = f"addrgroup {gname}" if fmt == "nxos" else f"net-group {gname}"
+        return [term]
+    return [render_addr(e, fmt) for e in addrset["entries"]]
+
+
+def render_acl(ir, fmt, ws_name, log_denies=False, acl_suffix=""):
+    groups, body, seq = {}, [], 10
+    acl_name = f"CSW_{sanitize_name(ws_name)}" + (f"_{acl_suffix}" if acl_suffix else "")
+    for ace in ir["aces"]:
+        commented = (ace["src"]["source"] == "empty" or ace["dst"]["source"] == "empty")
+        prefix = "! " if commented else ""
+        note = ""
+        if commented:
+            empty_side = "consumer" if ace["src"]["source"] == "empty" else "provider"
+            note = f"  ! {empty_side} filter matched 0 hosts"
+        src_terms = _addr_terms(fmt, ws_name, ace["src"],
+                                ace["origin"]["cons_name"], "SRC", groups)
+        dst_terms = _addr_terms(fmt, ws_name, ace["dst"],
+                                ace["origin"]["prov_name"], "DST", groups)
+        portstr = render_ports(ace["ports"])
+        for s in src_terms:
+            for d in dst_terms:
+                parts = [ace["action"], ace["proto"], s, d]
+                if portstr:
+                    parts.append(portstr)
+                body.append(f"{prefix}{seq} " + " ".join(parts) + note)
+                seq += 10
+    # Terminal explicit deny (CSW is a whitelist model).
+    body.append(f"{seq} deny ip any any" + (" log" if log_denies else ""))
+    # Assemble: object-groups first, then the ACL container + body.
+    lines = []
+    for gname in sorted(groups):
+        lines += groups[gname]
+    lines.append(FORMATS[fmt]["acl_open"].format(name=acl_name))
+    lines += [f" {b}" for b in body]
+    return lines

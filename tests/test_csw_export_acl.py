@@ -216,5 +216,39 @@ class TestRenderHelpers(unittest.TestCase):
         self.assertEqual(ea.render_ports([]), "")
 
 
+class TestRenderSingle(unittest.TestCase):
+    def _ir_one(self, src_ips, dst_ips, action="permit", proto="tcp", ports=None):
+        return {"aces": [{
+            "action": action, "proto": proto, "ports": ports or [{"op": "eq", "val": 443}],
+            "src": ea.build_addrset(src_ips, None, 256),
+            "dst": ea.build_addrset(dst_ips, None, 256),
+            "priority": 100,
+            "origin": {"policy_id": "p1", "cons_name": "cons", "prov_name": "prov"},
+        }], "fidelity": [], "has_errors": False}
+
+    def test_ios_raw_host_ace(self):
+        out = "\n".join(ea.render_acl(self._ir_one(["10.0.0.1"], ["10.0.1.1"]), "ios", "WS"))
+        self.assertIn("ip access-list extended CSW_WS", out)
+        self.assertIn("permit tcp host 10.0.0.1 host 10.0.1.1 eq 443", out)
+        self.assertIn("deny ip any any", out)
+
+    def test_nxos_uses_objgroup_for_multi(self):
+        ir = self._ir_one(["10.0.0.1", "10.0.2.1"], ["10.0.1.1"])  # 2 non-contiguous src
+        out = "\n".join(ea.render_acl(ir, "nxos", "WS"))
+        self.assertIn("object-group ip address", out)
+        self.assertIn("addrgroup", out)
+
+    def test_empty_membership_commented(self):
+        ir = self._ir_one([], ["10.0.1.1"])  # empty consumer
+        out = "\n".join(ea.render_acl(ir, "ios", "WS"))
+        self.assertTrue(any(line.strip().startswith("!") and "0 hosts" in line
+                            for line in out.splitlines()))
+
+    def test_log_denies(self):
+        out = "\n".join(ea.render_acl(self._ir_one(["10.0.0.1"], ["10.0.1.1"]),
+                                      "ios", "WS", log_denies=True))
+        self.assertIn("deny ip any any log", out)
+
+
 if __name__ == "__main__":   # repo convention — every test file carries this
     unittest.main()
