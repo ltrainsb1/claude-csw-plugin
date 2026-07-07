@@ -3,7 +3,7 @@ name: csw
 description: Use when the user asks about Cisco Secure Workload (CSW), Tetration, micro-segmentation, workload security, policy lifecycle, ADM, enforcement, agent/sensor fleet, scope or workspace onboarding, flow investigation, compliance audit, connector/orchestrator triage, or incident triage / fresh-alert response with containment options. Covers read-only reporting and gated write actions.
 user-invocable: true
 allowed-tools: Bash, Read, Write, WebFetch
-argument-hint: [report|policy|scopes|filters|connectors|inventory|flows|agents|lifecycle|investigate|onboard|upgrade|audit|triage|incident] [optional query or paste]
+argument-hint: [report|policy|scopes|filters|connectors|inventory|flows|agents|export-acl|lifecycle|investigate|onboard|upgrade|audit|triage|incident] [optional query or paste]
 ---
 
 # Cisco Secure Workload (CSW) API Skill
@@ -250,6 +250,8 @@ Analyze policies for a given scope or workspace:
 5. If the user provides a specific flow (src IP, dst IP, port), use quick analysis: `POST /policies/{rootScopeID}/quick_analysis`
 6. Show enforcement stats if available: `POST /policies/stats/enforced`
 
+> To emit these policies as a router/switch ACL (NX-OS, IOS-XR, or classic IOS), use `/csw export-acl`.
+
 ### `/csw scopes [optional scope name]` — Scope Detail Report
 Report on app scopes:
 
@@ -297,6 +299,26 @@ Report on deployed agents:
 2. Filter by hostname or IP if provided
 3. Show: hostname, IP, platform, version, enforcement mode, last check-in, config status
 4. `GET /openapi/v1/software/versions` — available versions for upgrade comparison
+
+### `/csw export-acl <workspace> --format {nxos|ios-xr|ios}` — Policy → Cisco ACL Export
+Export a workspace's policies as device-native ACL config. **Read-only — emits config text to stdout only; never pushes to a device; no write-gate applies.**
+
+Run the module directly:
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/bin/csw_export_acl.py" <workspace> --format nxos
+python3 "${CLAUDE_PLUGIN_ROOT}/bin/csw_export_acl.py" <workspace> --format ios --layout split
+```
+
+Options: `--layout single|split` (default single), `--version N` (default latest analyzed), `--warn-members N` (soft large-group warning, default 256), `--log-denies`.
+
+How it maps CSW intent to an ACL: consumer filter → source, provider filter → destination, L4 params → port match, CSW `priority` → ACE sequence order. Filters are expanded against **live inventory** (a point-in-time snapshot); on NX-OS / IOS-XR a filter with many members becomes an `object-group`, on classic IOS it becomes one ACE per host. Every list ends with an explicit `deny ip any any` to mirror CSW's whitelist model. A `! ==== FIDELITY NOTES ====` block surfaces every lossy translation.
+
+The module **exits non-zero** if any referenced filter was unreadable **or** an expansion hit the 50,000-host cluster cap (incomplete ACL).
+
+**v1 limitations (each surfaced in the fidelity block):**
+- **Filter kind:** consumer/provider must resolve to an inventory filter or a scope (both carry an expandable `query`). Ids that are ADM **cluster** ids are not exportable in v1 — the policy is skipped and the run exits non-zero. Prefer workspaces built on inventory filters / absolute policies.
+- **IPv6:** IPv4 ACLs only in v1; IPv6 members are dropped with a note.
+- **Split layout** approximates CSW's stateful model with stateless `established` return for TCP; non-TCP return is a plain reverse permit. Verify the assumed interface orientation stated in the output header.
 
 ## Workflows
 
@@ -565,6 +587,7 @@ Capabilities are identical between SaaS and self-hosted. The `Deploy` column in 
 | inventory | `flow_inventory_query` | Read |
 | flows | `flow_inventory_query` | Read |
 | agents | `sensor_management` | Read |
+| export-acl | `app_policy_management`, `flow_inventory_query` | Read |
 
 ### Workflows
 
