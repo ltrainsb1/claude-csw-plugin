@@ -299,3 +299,27 @@ def render_split(ir, fmt, ws_name, log_denies=False):
                 else ln
                 for ln in outbound]
     return header + inbound + [""] + outbound
+
+
+def render_header(ws_name, ws_id, version, cluster_url, fmt, layout,
+                  now_iso, ace_count, host_count):
+    return [
+        "! ====================================================================",
+        "! CSW policy export — generated config, review before applying",
+        f"! cluster: {cluster_url}",
+        f"! workspace: {ws_name} (id {ws_id})",
+        f"! version: {version}   format: {fmt}   layout: {layout}",
+        f"! generated: {now_iso}",
+        f"! ACEs: {ace_count}   expanded hosts: {host_count}",
+        "! Membership is a point-in-time snapshot; re-export after inventory changes.",
+        "! ====================================================================",
+    ]
+
+
+def render_fidelity(notes):
+    out = ["! ==== FIDELITY NOTES ===="]
+    if not notes:
+        out.append("! (none)")
+    else:
+        out += [f"! - {n}" for n in notes]
+    return out

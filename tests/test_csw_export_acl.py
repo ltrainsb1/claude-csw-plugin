@@ -268,5 +268,23 @@ class TestRenderSplit(unittest.TestCase):
         self.assertIn("orientation", out.lower())
 
 
+class TestHeaderFidelity(unittest.TestCase):
+    def test_header_stamps(self):
+        h = "\n".join(ea.render_header("WS", "42", 7, "https://c", "nxos", "single",
+                                       "2026-07-07T00:00:00Z", ace_count=3, host_count=9))
+        self.assertIn("workspace: WS (id 42)", h)
+        self.assertIn("version: 7", h)
+        self.assertIn("format: nxos", h)
+        self.assertIn("2026-07-07T00:00:00Z", h)
+
+    def test_fidelity_none(self):
+        self.assertIn("(none)", "\n".join(ea.render_fidelity([])))
+
+    def test_fidelity_lists(self):
+        out = "\n".join(ea.render_fidelity(["a note", "b note"]))
+        self.assertIn("FIDELITY NOTES", out)
+        self.assertIn("a note", out)
+
+
 if __name__ == "__main__":   # repo convention — every test file carries this
     unittest.main()
