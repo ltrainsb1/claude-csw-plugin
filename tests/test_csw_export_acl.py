@@ -328,5 +328,15 @@ class TestExportAcl(unittest.TestCase):
         self.assertIn("FIDELITY NOTES", text)
 
 
+class TestDeterminism(unittest.TestCase):
+    def test_byte_identical(self):
+        routes = TestExportAcl()._routes()
+        a, _ = ea.export_acl(fake_fetch(routes), "prod", "nxos", "single",
+                             256, False, None, "c", "t")
+        b, _ = ea.export_acl(fake_fetch(routes), "prod", "nxos", "single",
+                             256, False, None, "c", "t")
+        self.assertEqual(a, b)
+
+
 if __name__ == "__main__":   # repo convention — every test file carries this
     unittest.main()
