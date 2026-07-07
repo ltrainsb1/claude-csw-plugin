@@ -267,6 +267,12 @@ class TestRenderSplit(unittest.TestCase):
         self.assertIn("established", out)
         self.assertIn("orientation", out.lower())
 
+    def test_established_return_has_no_port(self):
+        # The forward dest-port must NOT be carried onto the stateless return.
+        out = "\n".join(ea.render_split(self._ir(), "ios", "WS"))
+        self.assertNotIn("eq 443 established", out)
+        self.assertIn("host 10.0.1.1 host 10.0.0.1 established", out)
+
 
 class TestHeaderFidelity(unittest.TestCase):
     def test_header_stamps(self):

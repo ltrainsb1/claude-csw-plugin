@@ -283,6 +283,11 @@ def _reverse_ir(ir):
         r["origin"] = {"policy_id": ace["origin"]["policy_id"],
                        "cons_name": ace["origin"]["prov_name"],
                        "prov_name": ace["origin"]["cons_name"]}
+        # TCP return is matched statelessly via 'established'; the forward
+        # dest-port does not apply to the (ephemeral) return dest-port, so drop
+        # it — carrying it forward would wrongly block legitimate replies.
+        if ace["proto"] == "tcp" and ace["action"] == "permit":
+            r["ports"] = []
         rev.append(r)
     return {"aces": rev, "fidelity": ir["fidelity"], "has_errors": ir.get("has_errors", False)}
 
@@ -363,6 +368,9 @@ def export_acl(fetch, ws_query, fmt, layout, warn_members, log_denies,
     ir = build_ir(policies, resolved)
     if layout == "split":
         body = render_split(ir, fmt, ws.get("name", str(ws_id)), log_denies)
+        ir["fidelity"].append(
+            "layout=split: TCP return matched statelessly via 'established' (no port); "
+            "non-TCP return is a plain reverse permit — a stateless approximation")
     else:
         body = render_acl(ir, fmt, ws.get("name", str(ws_id)), log_denies)
 
