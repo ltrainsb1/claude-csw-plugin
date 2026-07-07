@@ -135,5 +135,64 @@ class TestResolveFilter(unittest.TestCase):
         self.assertTrue(r["addrset"]["truncated"])
 
 
+class TestBuildIR(unittest.TestCase):
+    def _resolved(self):
+        return {
+            "C": {"id": "C", "name": "cons", "error": None,
+                  "addrset": ea.build_addrset(["10.0.0.1"], None, 256)},
+            "P": {"id": "P", "name": "prov", "error": None,
+                  "addrset": ea.build_addrset(["10.0.1.1"], None, 256)},
+        }
+
+    def test_orders_by_priority_and_maps_action(self):
+        policies = [
+            {"id": "p2", "consumer_filter_id": "C", "provider_filter_id": "P",
+             "action": "ALLOW", "priority": 200, "l4_params": [{"proto": 6, "port": [443, 443]}]},
+            {"id": "p1", "consumer_filter_id": "C", "provider_filter_id": "P",
+             "action": "DENY", "priority": 100, "l4_params": []},
+        ]
+        ir = ea.build_ir(policies, self._resolved())
+        self.assertEqual([a["priority"] for a in ir["aces"]], [100, 200])
+        self.assertEqual(ir["aces"][0]["action"], "deny")
+        self.assertEqual(ir["aces"][0]["proto"], "ip")
+        self.assertEqual(ir["aces"][1]["proto"], "tcp")
+
+    def test_unreadable_filter_skips_with_fidelity(self):
+        res = self._resolved()
+        res["P"]["error"] = "boom"
+        policies = [{"id": "p1", "consumer_filter_id": "C", "provider_filter_id": "P",
+                     "action": "ALLOW", "priority": 1, "l4_params": []}]
+        ir = ea.build_ir(policies, res)
+        self.assertEqual(ir["aces"], [])
+        self.assertTrue(any("boom" in n for n in ir["fidelity"]))
+        self.assertTrue(ir["has_errors"])
+
+    def test_empty_membership_notes(self):
+        res = self._resolved()
+        res["C"]["addrset"] = ea.build_addrset([], None, 256)
+        policies = [{"id": "p1", "consumer_filter_id": "C", "provider_filter_id": "P",
+                     "action": "ALLOW", "priority": 1, "l4_params": []}]
+        ir = ea.build_ir(policies, res)
+        self.assertTrue(any("0 hosts" in n for n in ir["fidelity"]))
+
+    def test_truncation_sets_has_errors(self):
+        res = self._resolved()
+        res["C"]["addrset"]["truncated"] = True
+        policies = [{"id": "p1", "consumer_filter_id": "C", "provider_filter_id": "P",
+                     "action": "ALLOW", "priority": 1, "l4_params": []}]
+        ir = ea.build_ir(policies, res)
+        self.assertTrue(ir["has_errors"])
+        self.assertTrue(any("INCOMPLETE" in n for n in ir["fidelity"]))
+
+    def test_ipv6_dropped_note(self):
+        res = self._resolved()
+        res["C"]["addrset"]["v6_dropped"] = 3
+        policies = [{"id": "p1", "consumer_filter_id": "C", "provider_filter_id": "P",
+                     "action": "ALLOW", "priority": 1, "l4_params": []}]
+        ir = ea.build_ir(policies, res)
+        self.assertTrue(any("IPv6" in n for n in ir["fidelity"]))
+        self.assertFalse(ir["has_errors"])  # v6 drop is lossy but not an error
+
+
 if __name__ == "__main__":   # repo convention — every test file carries this
     unittest.main()

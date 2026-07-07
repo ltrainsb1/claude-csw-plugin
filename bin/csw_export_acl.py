@@ -140,3 +140,44 @@ def resolve_filter(fetch, filter_id, warn_members):
     return {"id": filter_id, "name": name,
             "addrset": build_addrset(ips, query, warn_members, search_limit=SEARCH_LIMIT),
             "error": None}
+
+
+def build_ir(policies, resolved):
+    aces, fidelity, has_errors = [], [], False
+    for pol in sorted(policies, key=lambda p: (p.get("priority", 0), str(p.get("id")))):
+        pid_ = pol.get("id")
+        cid, pid = pol.get("consumer_filter_id"), pol.get("provider_filter_id")
+        cons, prov = resolved.get(cid), resolved.get(pid)
+        bad = [r for r in (cons, prov) if r is None or r.get("error")]
+        if bad:
+            reason = "; ".join(r["error"] for r in bad if r and r.get("error")) or "missing filter"
+            fidelity.append(f"policy {pid_} skipped: {reason}")
+            has_errors = True
+            continue
+        for side in (cons, prov):
+            a = side["addrset"]
+            if a["source"] == "empty" and a.get("v6_dropped", 0) == 0:
+                fidelity.append(f"policy {pid_}: filter '{side['name']}' matched 0 hosts")
+            if a["large"]:
+                fidelity.append(f"policy {pid_}: filter '{side['name']}' "
+                                f"has {a['total']} members (large)")
+            if a.get("v6_dropped"):
+                fidelity.append(f"policy {pid_}: filter '{side['name']}' — "
+                                f"{a['v6_dropped']} IPv6 members dropped (IPv4 ACL only in v1)")
+            if a.get("truncated"):
+                fidelity.append(f"policy {pid_}: filter '{side['name']}' matched >= "
+                                f"{SEARCH_LIMIT} hosts — ACL INCOMPLETE (narrow the filter "
+                                f"or use /inventory/stats)")
+                has_errors = True
+        action = "deny" if str(pol.get("action", "")).upper() == "DENY" else "permit"
+        l4s = pol.get("l4_params") or [{}]
+        for l4 in l4s:
+            proto, ports = parse_l4(l4) if l4 else ("ip", [])
+            aces.append({
+                "action": action, "proto": proto, "ports": ports,
+                "src": cons["addrset"], "dst": prov["addrset"],
+                "priority": pol.get("priority", 0),
+                "origin": {"policy_id": pid_,
+                           "cons_name": cons["name"], "prov_name": prov["name"]},
+            })
+    return {"aces": aces, "fidelity": fidelity, "has_errors": has_errors}
