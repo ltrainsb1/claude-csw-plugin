@@ -194,5 +194,27 @@ class TestBuildIR(unittest.TestCase):
         self.assertFalse(ir["has_errors"])  # v6 drop is lossy but not an error
 
 
+class TestRenderHelpers(unittest.TestCase):
+    def n(self, s):
+        import ipaddress
+        return ipaddress.ip_network(s)
+
+    def test_addr_wildcard(self):
+        self.assertEqual(ea.render_addr(self.n("10.10.0.0/24"), "nxos"), "10.10.0.0 0.0.0.255")
+        self.assertEqual(ea.render_addr(self.n("10.10.0.0/24"), "ios"), "10.10.0.0 0.0.0.255")
+
+    def test_addr_prefix(self):
+        self.assertEqual(ea.render_addr(self.n("10.10.0.0/24"), "ios-xr"), "10.10.0.0/24")
+
+    def test_addr_host_and_any(self):
+        self.assertEqual(ea.render_addr(self.n("10.1.1.5/32"), "nxos"), "host 10.1.1.5")
+        self.assertEqual(ea.render_addr(self.n("0.0.0.0/0"), "ios-xr"), "any")
+
+    def test_ports(self):
+        self.assertEqual(ea.render_ports([{"op": "eq", "val": 443}]), "eq 443")
+        self.assertEqual(ea.render_ports([{"op": "range", "lo": 80, "hi": 90}]), "range 80 90")
+        self.assertEqual(ea.render_ports([]), "")
+
+
 if __name__ == "__main__":   # repo convention — every test file carries this
     unittest.main()

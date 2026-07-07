@@ -181,3 +181,33 @@ def build_ir(policies, resolved):
                            "cons_name": cons["name"], "prov_name": prov["name"]},
             })
     return {"aces": aces, "fidelity": fidelity, "has_errors": has_errors}
+
+
+# Format registry: how each Cisco syntax differs. Renderers read this.
+FORMATS = {
+    "nxos":   {"mask": "wildcard", "acl_open": "ip access-list {name}",
+               "objgroup": True},
+    "ios-xr": {"mask": "prefix",   "acl_open": "ipv4 access-list {name}",
+               "objgroup": True},
+    "ios":    {"mask": "wildcard", "acl_open": "ip access-list extended {name}",
+               "objgroup": False},
+}
+
+
+def render_addr(net, fmt):
+    if net.prefixlen == 0:
+        return "any"
+    if net.prefixlen == net.max_prefixlen:
+        return f"host {net.network_address}"
+    if FORMATS[fmt]["mask"] == "prefix":
+        return f"{net.network_address}/{net.prefixlen}"
+    return f"{net.network_address} {net.hostmask}"
+
+
+def render_ports(ports):
+    if not ports:
+        return ""
+    p = ports[0]
+    if p["op"] == "eq":
+        return f"eq {p['val']}"
+    return f"range {p['lo']} {p['hi']}"
