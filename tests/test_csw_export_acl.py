@@ -328,6 +328,13 @@ class TestExportAcl(unittest.TestCase):
         self.assertIn("FIDELITY NOTES", text)
 
 
+class TestCli(unittest.TestCase):
+    def test_argparse_missing_workspace_returns_2(self):
+        # argparse errors on the missing positional; main() returns its code.
+        code = ea.main(["--format", "ios"])
+        self.assertEqual(code, 2)
+
+
 class TestDeterminism(unittest.TestCase):
     def test_byte_identical(self):
         routes = TestExportAcl()._routes()

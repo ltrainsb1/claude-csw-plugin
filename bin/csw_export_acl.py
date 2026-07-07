@@ -376,3 +376,40 @@ def export_acl(fetch, ws_query, fmt, layout, warn_members, log_denies,
     # lossy notes, not errors — they do not fail the run.
     exit_code = 1 if ir["has_errors"] else 0
     return text, exit_code
+
+
+def build_fetch():
+    """Lazy import so tests never need a live cluster. Mirrors csw_compliance."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from csw_api import make_request
+    return lambda method, path, body=None: make_request(method, path, body=body)
+
+
+def main(argv=None):
+    argv = argv if argv is not None else sys.argv[1:]
+    parser = argparse.ArgumentParser(
+        prog="csw_export_acl.py",
+        description="Export a CSW workspace's policies to Cisco ACL syntax (read-only).")
+    parser.add_argument("workspace", help="workspace name or id")
+    parser.add_argument("--format", required=True, choices=["nxos", "ios-xr", "ios"])
+    parser.add_argument("--layout", choices=["single", "split"], default="single")
+    parser.add_argument("--warn-members", type=int, default=256)
+    parser.add_argument("--log-denies", action="store_true")
+    parser.add_argument("--version", type=int, default=None)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 2
+
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cluster_url = os.environ.get("CSW_API_URL", "<cluster>")
+    text, code = export_acl(build_fetch(), args.workspace, args.format, args.layout,
+                            args.warn_members, args.log_denies, args.version,
+                            cluster_url, now_iso)
+    print(text)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
