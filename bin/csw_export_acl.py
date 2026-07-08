@@ -110,7 +110,33 @@ def _extract_ips(data):
     return ips
 
 
+def resolve_query(fetch, fid, name, query, warn_members):
+    """Expand a filter *query* to an AddrSet. This is the core used both by the
+    inline-filter path (policies embed the full consumer/provider filter object,
+    incl. Cluster-type — verified live) and by the fetch-by-id fallback."""
+    if query is None:
+        return {"id": fid, "name": name,
+                "addrset": build_addrset([], None, warn_members),
+                "error": f"filter '{name}' has no query — not expandable"}
+    # Address-only queries short-circuit — no inventory call needed.
+    if _address_query_cidr(query):
+        return {"id": fid, "name": name,
+                "addrset": build_addrset([], query, warn_members), "error": None}
+    body = {"filter": query, "dimensions": ["ip"], "limit": SEARCH_LIMIT}
+    res = fetch("POST", "/openapi/v1/inventory/search", body)
+    if res.get("status") != 200:
+        return {"id": fid, "name": name,
+                "addrset": build_addrset([], None, warn_members),
+                "error": f"inventory search failed for {name} (status {res.get('status')})"}
+    ips = _extract_ips(res.get("data"))
+    return {"id": fid, "name": name,
+            "addrset": build_addrset(ips, query, warn_members, search_limit=SEARCH_LIMIT),
+            "error": None}
+
+
 def resolve_filter(fetch, filter_id, warn_members):
+    """Fetch-by-id fallback for when a policy does not embed the filter object.
+    Tries /inventory_filters/{id}, then /scopes/{id}."""
     got = fetch("GET", f"/openapi/v1/inventory_filters/{filter_id}")
     fdata = (got["data"] if got.get("status") == 200
              and isinstance(got.get("data"), dict) else None)
@@ -123,28 +149,20 @@ def resolve_filter(fetch, filter_id, warn_members):
         return {"id": filter_id, "name": filter_id,
                 "addrset": build_addrset([], None, warn_members),
                 "error": (f"id {filter_id} is neither an inventory filter nor a "
-                          f"scope (may be an ADM cluster) — not exportable in v1")}
-    query = fdata.get("query")
-    name = fdata.get("name", filter_id)
-    # Address-only queries short-circuit — no inventory call needed.
-    if _address_query_cidr(query):
-        return {"id": filter_id, "name": name,
-                "addrset": build_addrset([], query, warn_members), "error": None}
-    body = {"filter": query, "dimensions": ["ip"], "limit": SEARCH_LIMIT}
-    res = fetch("POST", "/openapi/v1/inventory/search", body)
-    if res.get("status") != 200:
-        return {"id": filter_id, "name": name,
-                "addrset": build_addrset([], None, warn_members),
-                "error": f"inventory search failed for {name} (status {res.get('status')})"}
-    ips = _extract_ips(res.get("data"))
-    return {"id": filter_id, "name": name,
-            "addrset": build_addrset(ips, query, warn_members, search_limit=SEARCH_LIMIT),
-            "error": None}
+                          f"scope, and the policy did not embed it — not exportable")}
+    return resolve_query(fetch, filter_id, fdata.get("name", filter_id),
+                         fdata.get("query"), warn_members)
+
+
+def _rank_order(pol):
+    """ABSOLUTE policies always outrank DEFAULT, regardless of priority number."""
+    return 0 if str(pol.get("rank", "")).upper() == "ABSOLUTE" else 1
 
 
 def build_ir(policies, resolved):
     aces, fidelity, has_errors = [], [], False
-    for pol in sorted(policies, key=lambda p: (p.get("priority", 0), str(p.get("id")))):
+    for pol in sorted(policies,
+                      key=lambda p: (_rank_order(p), p.get("priority", 0), str(p.get("id")))):
         pid_ = pol.get("id")
         cid, pid = pol.get("consumer_filter_id"), pol.get("provider_filter_id")
         cons, prov = resolved.get(cid), resolved.get(pid)
@@ -242,7 +260,7 @@ def _addr_terms(fmt, ws_name, addrset, filter_name, side, groups):
     return [render_addr(e, fmt) for e in addrset["entries"]]
 
 
-def render_acl(ir, fmt, ws_name, log_denies=False, acl_suffix=""):
+def render_acl(ir, fmt, ws_name, log_denies=False, acl_suffix="", catch_all="DENY"):
     groups, body, seq = {}, [], 10
     acl_name = f"CSW_{sanitize_name(ws_name)}" + (f"_{acl_suffix}" if acl_suffix else "")
     for ace in ir["aces"]:
@@ -264,8 +282,10 @@ def render_acl(ir, fmt, ws_name, log_denies=False, acl_suffix=""):
                     parts.append(portstr)
                 body.append(f"{prefix}{seq} " + " ".join(parts) + note)
                 seq += 10
-    # Terminal explicit deny (CSW is a whitelist model).
-    body.append(f"{seq} deny ip any any" + (" log" if log_denies else ""))
+    # Terminal ACE from the workspace's catch_all_action (verified live: the
+    # policies envelope carries this; default DENY = whitelist model).
+    terminal = "permit" if str(catch_all).upper() == "ALLOW" else "deny"
+    body.append(f"{seq} {terminal} ip any any" + (" log" if log_denies else ""))
     # Assemble: object-groups first, then the ACL container + body.
     lines = []
     for gname in sorted(groups):
@@ -292,10 +312,11 @@ def _reverse_ir(ir):
     return {"aces": rev, "fidelity": ir["fidelity"], "has_errors": ir.get("has_errors", False)}
 
 
-def render_split(ir, fmt, ws_name, log_denies=False):
+def render_split(ir, fmt, ws_name, log_denies=False, catch_all="DENY"):
     header = ["! layout=split — verify orientation: _IN applied inbound on the",
               "! consumer-facing interface, _OUT outbound (return traffic)."]
-    inbound = render_acl(ir, fmt, ws_name, log_denies, acl_suffix="IN")
+    inbound = render_acl(ir, fmt, ws_name, log_denies, acl_suffix="IN", catch_all=catch_all)
+    # OUT is return traffic — default-deny regardless of the forward catch-all.
     outbound = render_acl(_reverse_ir(ir), fmt, ws_name, log_denies, acl_suffix="OUT")
     # Reversed TCP permits get 'established' so stateless hardware passes replies.
     outbound = [ln + " established"
@@ -331,48 +352,84 @@ def render_fidelity(notes):
 
 
 def _find_workspace(fetch, ws_query):
+    """Return (workspace, error). A non-None error means the listing call itself
+    failed (auth/connectivity/URL) — distinct from 'listed fine, no name match'
+    (returns (None, None)), so the operator isn't sent to fix the wrong thing."""
     got = fetch("GET", "/openapi/v1/applications")
     if got.get("status") != 200 or not isinstance(got.get("data"), list):
-        return None
+        return None, (f"could not list workspaces (status {got.get('status')}) — "
+                      f"check credentials/capability and CSW_API_URL")
     for app in got["data"]:
         if str(app.get("id")) == str(ws_query) or app.get("name") == ws_query:
-            return app
-    return None
+            return app, None
+    return None, None
+
+
+def _parse_policies(data):
+    """Return (policies, catch_all_action). The live API returns
+    {absolute_policies, default_policies, catch_all_action}; a bare list is also
+    accepted (older shapes / test fixtures). ABSOLUTE + DEFAULT are concatenated;
+    build_ir orders ABSOLUTE ahead of DEFAULT by rank."""
+    if isinstance(data, list):
+        return data, None
+    if isinstance(data, dict):
+        pols = (list(data.get("absolute_policies") or [])
+                + list(data.get("default_policies") or []))
+        return pols, data.get("catch_all_action")
+    return None, None
 
 
 def export_acl(fetch, ws_query, fmt, layout, warn_members, log_denies,
                version, cluster_url, now_iso):
     if fmt not in FORMATS:
         return f"! ERROR: unknown format {fmt!r} (choose nxos|ios-xr|ios)", 2
-    ws = _find_workspace(fetch, ws_query)
+    ws, wserr = _find_workspace(fetch, ws_query)
+    if wserr:
+        return f"! ERROR: {wserr}", 2
     if ws is None:
-        return f"! ERROR: workspace {ws_query!r} not found", 2
+        return f"! ERROR: workspace {ws_query!r} not found (listing succeeded; no name/id match)", 2
     ws_id = ws.get("id")
     ver = version if version is not None else ws.get("latest_adm_version")
     path = f"/openapi/v1/applications/{ws_id}/policies"
     if ver is not None:
         path += f"?version={ver}"
     pres = fetch("GET", path)
-    policies = pres.get("data") if pres.get("status") == 200 else None
-    if not isinstance(policies, list):
-        return f"! ERROR: could not read policies for workspace {ws.get('name')}", 2
+    policies, catch_all = (_parse_policies(pres.get("data"))
+                           if pres.get("status") == 200 else (None, None))
+    if policies is None:
+        return (f"! ERROR: could not read policies for workspace {ws.get('name')} "
+                f"(status {pres.get('status')})"), 2
+    catch_all = catch_all or "DENY"
 
-    # Resolve every unique filter id once.
-    ids = set()
+    # Resolve each unique filter once. Prefer the filter object embedded in the
+    # policy (carries a query for every filter_type incl. Cluster — verified
+    # live); fall back to fetch-by-id only when a policy omits the object.
+    fobjs = {}   # filter_id -> embedded filter object (or None)
     for p in policies:
-        ids.add(p.get("consumer_filter_id"))
-        ids.add(p.get("provider_filter_id"))
-    resolved = {fid: resolve_filter(fetch, fid, warn_members)
-                for fid in ids if fid is not None}
+        for side in ("consumer", "provider"):
+            fid = p.get(f"{side}_filter_id")
+            if fid is None:
+                continue
+            if fobjs.get(fid) is None:
+                obj = p.get(f"{side}_filter")
+                fobjs[fid] = obj if isinstance(obj, dict) else fobjs.get(fid)
+            fobjs.setdefault(fid, None)
+    resolved = {}
+    for fid, obj in fobjs.items():
+        if isinstance(obj, dict) and obj.get("query") is not None:
+            resolved[fid] = resolve_query(fetch, fid, obj.get("name", fid),
+                                          obj.get("query"), warn_members)
+        else:
+            resolved[fid] = resolve_filter(fetch, fid, warn_members)
 
     ir = build_ir(policies, resolved)
     if layout == "split":
-        body = render_split(ir, fmt, ws.get("name", str(ws_id)), log_denies)
+        body = render_split(ir, fmt, ws.get("name", str(ws_id)), log_denies, catch_all=catch_all)
         ir["fidelity"].append(
             "layout=split: TCP return matched statelessly via 'established' (no port); "
             "non-TCP return is a plain reverse permit — a stateless approximation")
     else:
-        body = render_acl(ir, fmt, ws.get("name", str(ws_id)), log_denies)
+        body = render_acl(ir, fmt, ws.get("name", str(ws_id)), log_denies, catch_all=catch_all)
 
     host_count = sum(r["addrset"]["total"] for r in resolved.values())
     header = render_header(ws.get("name", ""), ws_id, ver, cluster_url, fmt, layout,

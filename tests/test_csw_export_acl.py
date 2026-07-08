@@ -341,6 +341,80 @@ class TestCli(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+class TestLiveShapes(unittest.TestCase):
+    """Covers real Tetration response shapes discovered during post-flight."""
+
+    def test_parse_policies_envelope(self):
+        data = {"absolute_policies": [{"id": "a"}],
+                "default_policies": [{"id": "d"}], "catch_all_action": "DENY"}
+        pols, ca = ea._parse_policies(data)
+        self.assertEqual([p["id"] for p in pols], ["a", "d"])
+        self.assertEqual(ca, "DENY")
+
+    def test_parse_policies_bare_list(self):
+        pols, ca = ea._parse_policies([{"id": "x"}])
+        self.assertEqual([p["id"] for p in pols], ["x"])
+        self.assertIsNone(ca)
+
+    def test_absolute_outranks_default(self):
+        res = {"C": {"id": "C", "name": "c", "error": None,
+                     "addrset": ea.build_addrset(["10.0.0.1"], None, 256)},
+               "P": {"id": "P", "name": "p", "error": None,
+                     "addrset": ea.build_addrset(["10.0.1.1"], None, 256)}}
+        policies = [
+            {"id": "def-hi", "rank": "DEFAULT", "priority": 10,
+             "consumer_filter_id": "C", "provider_filter_id": "P", "action": "ALLOW", "l4_params": []},
+            {"id": "abs-lo", "rank": "ABSOLUTE", "priority": 900,
+             "consumer_filter_id": "C", "provider_filter_id": "P", "action": "DENY", "l4_params": []},
+        ]
+        ir = ea.build_ir(policies, res)
+        # ABSOLUTE must come first despite its higher priority number.
+        self.assertEqual([a["origin"]["policy_id"] for a in ir["aces"]], ["abs-lo", "def-hi"])
+
+    def test_catch_all_allow_terminal(self):
+        ir = {"aces": [], "fidelity": [], "has_errors": False}
+        out = "\n".join(ea.render_acl(ir, "ios", "WS", catch_all="ALLOW"))
+        self.assertIn("permit ip any any", out)
+        self.assertNotIn("deny ip any any", out)
+
+    def test_embedded_cluster_filter_resolves(self):
+        # Policy embeds a Cluster-type consumer/provider filter WITH a query;
+        # no /inventory_filters GET should be needed.
+        routes = {
+            ("GET", "/openapi/v1/applications"):
+                {"status": 200, "data": [{"id": "9", "name": "ws", "latest_adm_version": 2}]},
+            ("GET", "/openapi/v1/applications/9/policies?version=2"):
+                {"status": 200, "data": {"catch_all_action": "DENY", "absolute_policies": [],
+                 "default_policies": [{
+                    "id": "pol1", "rank": "DEFAULT", "action": "ALLOW", "priority": 100,
+                    "l4_params": [{"proto": 6, "port": [443, 443]}],
+                    "consumer_filter_id": "CL1", "provider_filter_id": "CL2",
+                    "consumer_filter": {"id": "CL1", "filter_type": "Cluster", "name": "web",
+                        "query": {"type": "eq", "field": "os", "value": "linux"}},
+                    "provider_filter": {"id": "CL2", "filter_type": "Cluster", "name": "db",
+                        "query": {"type": "subnet", "field": "ip", "value": "10.5.0.0/24"}},
+                 }]}},
+            ("POST", "/openapi/v1/inventory/search"):
+                {"status": 200, "data": {"results": [{"ip": "10.9.9.9"}]}},
+        }
+        f = fake_fetch(routes)
+        text, code = ea.export_acl(f, "ws", "ios", "single", 256, False, None, "c", "t")
+        self.assertEqual(code, 0)
+        self.assertIn("permit tcp host 10.9.9.9 10.5.0.0 0.0.0.255 eq 443", text)
+        # No fetch to /inventory_filters/* should have occurred (embedded filters used).
+        self.assertFalse(any(p.startswith("/openapi/v1/inventory_filters/") for _, p, _ in f.calls))
+
+    def test_listing_api_error_not_masked_as_not_found(self):
+        routes = {("GET", "/openapi/v1/applications"):
+                  {"status": 401, "data": {"error": "unknown credentials"}}}
+        text, code = ea.export_acl(fake_fetch(routes), "ws", "ios", "single",
+                                   256, False, None, "c", "t")
+        self.assertEqual(code, 2)
+        self.assertIn("could not list workspaces", text)
+        self.assertIn("401", text)
+        self.assertNotIn("not found", text)
+
+
 class TestDeterminism(unittest.TestCase):
     def test_byte_identical(self):
         routes = TestExportAcl()._routes()

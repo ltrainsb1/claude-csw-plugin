@@ -315,10 +315,12 @@ How it maps CSW intent to an ACL: consumer filter → source, provider filter �
 
 The module **exits non-zero** if any referenced filter was unreadable **or** an expansion hit the 50,000-host cluster cap (incomplete ACL).
 
+Policies are read from the `{absolute_policies, default_policies, catch_all_action}` envelope: absolute rules render first, then default, and the terminal ACE mirrors `catch_all_action` (`permit ip any any` for an ALLOW workspace, else `deny ip any any`). ADM **Cluster**-type consumer/provider filters are resolved from the filter object embedded in each policy — no extra fetch — so ADM workspaces export fine.
+
 **v1 limitations (each surfaced in the fidelity block):**
-- **Filter kind:** consumer/provider must resolve to an inventory filter or a scope (both carry an expandable `query`). Ids that are ADM **cluster** ids are not exportable in v1 — the policy is skipped and the run exits non-zero. Prefer workspaces built on inventory filters / absolute policies.
+- **Filter kind:** consumer/provider are resolved from the policy's embedded filter `query` (works for Inventory and Cluster filters). A filter with no embeddable query and no fetchable `/inventory_filters/{id}` or `/scopes/{id}` is skipped with a note and the run exits non-zero.
 - **IPv6:** IPv4 ACLs only in v1; IPv6 members are dropped with a note.
-- **Split layout** approximates CSW's stateful model with stateless `established` return for TCP; non-TCP return is a plain reverse permit. Verify the assumed interface orientation stated in the output header.
+- **Split layout** approximates CSW's stateful model with stateless `established` return for TCP (no port carried onto the return); non-TCP return is a plain reverse permit. Verify the assumed interface orientation stated in the output header.
 
 ## Workflows
 
