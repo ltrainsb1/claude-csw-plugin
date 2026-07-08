@@ -96,6 +96,10 @@ These produce reports against the live CSW cluster. None propose writes; none in
 - **What it provides:** deployed agents with platform, version, enforcement mode, last check-in, config status. Filterable by host/IP.
 - **Endpoints:** `GET /openapi/v1/sensors`, `GET /openapi/v1/software/versions`.
 
+### `/csw export-acl <workspace> --format {nxos|ios-xr|ios}` — Policy → Cisco ACL Export
+- **What it provides:** a workspace's policies rendered as device-native ACL config (NX-OS, IOS-XR, or classic IOS). Consumer→source, provider→destination, L4→port match, CSW priority→ACE order; filters expanded against live inventory (object-groups on NX-OS/IOS-XR, raw ACEs on IOS); explicit terminal `deny ip any any`; a fidelity-notes block for every lossy translation. **Read-only — text to stdout only, no device push, no write-gate.** Options: `--layout single|split`, `--version N`, `--warn-members N`, `--log-denies`.
+- **Endpoints:** `GET /applications`, `GET /applications/{id}/policies`, `GET /inventory_filters/{id}` (or `GET /scopes/{id}`), `POST /inventory/search`.
+
 ## Workflows (7)
 
 These are guided multi-step flows: read-only discovery → single recommended next step → if the next step is a write, route through the Write Actions gate. Each write requires its own per-call approval phrase (`approve <tier> <short-id>`).

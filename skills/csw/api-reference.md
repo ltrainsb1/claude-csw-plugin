@@ -81,7 +81,9 @@ Nested example:
 | POST | `/policies/stats/enforced` | Enforced policy hit stats | B |
 | POST | `/policies/stats/analyzed` | Analyzed policy hit stats | B |
 
-**Policy object fields**: `id`, `consumer_filter_id`, `provider_filter_id`, `action` (ALLOW/DENY), `priority`, `l4_params` (list of port/proto), `version`
+**Policy object fields**: `id`, `consumer_filter_id`, `provider_filter_id`, `action` (ALLOW/DENY), `priority`, `l4_params` (list of port/proto), `version`, `rank` (`ABSOLUTE` | `DEFAULT`). Each policy also **embeds the full `consumer_filter` / `provider_filter` object inline** (with `filter_type`, `name`, and an expandable `query`) — including for `filter_type: "Cluster"` (ADM-generated clusters), so a consumer can resolve members without a separate `/inventory_filters/{id}` fetch.
+
+> **`GET /applications/{id}/policies` returns an envelope, not a bare list** (verified live against a 4.x tenant): `{"absolute_policies": [...], "default_policies": [...], "catch_all_action": "ALLOW"|"DENY"}`. `absolute_policies` are evaluated **before** `default_policies` regardless of `priority`. `catch_all_action` is the workspace's implicit final rule. `bin/csw_export_acl.py` (`_parse_policies`) handles both this envelope and a bare list.
 
 **Quick analysis body**:
 ```json
