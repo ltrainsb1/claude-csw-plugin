@@ -300,16 +300,28 @@ Report on deployed agents:
 3. Show: hostname, IP, platform, version, enforcement mode, last check-in, config status
 4. `GET /openapi/v1/software/versions` — available versions for upgrade comparison
 
-### `/csw export-acl <workspace> --format {nxos|ios-xr|ios}` — Policy → Cisco ACL Export
+### `/csw export-acl <workspace> [--format {nxos|ios-xr|ios}]` — Policy → Cisco ACL Export
 Export a workspace's policies as device-native ACL config. **Read-only — emits config text to stdout only; never pushes to a device; no write-gate applies.**
 
-Run the module directly:
+**Interactive flow (when the user does NOT specify a format):**
+1. **Show the CSW policy first.** Run with `--show-policy` (no format needed) and present the returned markdown table — the operator reviews the source policy (rank, priority, action, consumer/provider with resolved host counts, L4) before choosing a target syntax:
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/bin/csw_export_acl.py" <workspace> --show-policy
+   ```
+2. **Ask which format** (`nxos` | `ios-xr` | `ios`) and layout (`single` | `split`).
+3. **Emit the report.** Run with `--report --format <choice>` and present the markdown report — it pairs the CSW policy (source) with the generated ACL and a per-policy → ACE-sequence mapping:
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/bin/csw_export_acl.py" <workspace> --report --format <choice> [--layout split]
+   ```
+
+**Direct flow (format specified):** skip straight to output. Use `--report` for the markdown policy+ACL report, or omit it for raw ACL config text:
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/bin/csw_export_acl.py" <workspace> --format nxos
+python3 "${CLAUDE_PLUGIN_ROOT}/bin/csw_export_acl.py" <workspace> --format nxos            # raw ACL
+python3 "${CLAUDE_PLUGIN_ROOT}/bin/csw_export_acl.py" <workspace> --format nxos --report   # markdown report
 python3 "${CLAUDE_PLUGIN_ROOT}/bin/csw_export_acl.py" <workspace> --format ios --layout split
 ```
 
-Options: `--layout single|split` (default single), `--version N` (default latest analyzed), `--warn-members N` (soft large-group warning, default 256), `--log-denies`.
+Options: `--report` (markdown policy+ACL report), `--show-policy` (policy table only, no format needed), `--layout single|split` (default single), `--version N` (default latest analyzed), `--warn-members N` (soft large-group warning, default 256), `--log-denies`.
 
 How it maps CSW intent to an ACL: consumer filter → source, provider filter → destination, L4 params → port match, CSW `priority` → ACE sequence order. Filters are expanded against **live inventory** (a point-in-time snapshot); on NX-OS / IOS-XR a filter with many members becomes an `object-group`, on classic IOS it becomes one ACE per host. Every list ends with an explicit `deny ip any any` to mirror CSW's whitelist model. A `! ==== FIDELITY NOTES ====` block surfaces every lossy translation.
 
