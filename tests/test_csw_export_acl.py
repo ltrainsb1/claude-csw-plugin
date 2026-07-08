@@ -250,6 +250,26 @@ class TestRenderSingle(unittest.TestCase):
         self.assertIn("deny ip any any log", out)
 
 
+class TestProvenance(unittest.TestCase):
+    def test_render_acl_records_policy_to_seq(self):
+        ir = {"aces": [
+            {"action": "permit", "proto": "tcp", "ports": [{"op": "eq", "val": 443}],
+             "src": ea.build_addrset(["10.0.0.1"], None, 256),
+             "dst": ea.build_addrset(["10.0.1.1", "10.0.2.1"], None, 256),  # 2 hosts (ios → 2 ACEs)
+             "priority": 100,
+             "origin": {"policy_id": "pA", "cons_name": "c", "prov_name": "p"}},
+            {"action": "permit", "proto": "udp", "ports": [{"op": "eq", "val": 53}],
+             "src": ea.build_addrset(["10.0.0.1"], None, 256),
+             "dst": ea.build_addrset(["10.0.3.1"], None, 256),
+             "priority": 200,
+             "origin": {"policy_id": "pB", "cons_name": "c", "prov_name": "p"}},
+        ], "fidelity": [], "has_errors": False}
+        prov = {}
+        ea.render_acl(ir, "ios", "WS", provenance=prov)
+        self.assertEqual(prov["pA"], [10, 20])   # expanded to 2 host ACEs
+        self.assertEqual(prov["pB"], [30])
+
+
 class TestRenderSplit(unittest.TestCase):
     def _ir(self):
         return {"aces": [{
@@ -340,6 +360,16 @@ class TestCli(unittest.TestCase):
         code = ea.main(["--format", "ios"])
         self.assertEqual(code, 2)
 
+    def test_report_requires_format(self):
+        # --report without --format (and not --show-policy) is a usage error,
+        # caught before any network call.
+        code = ea.main(["ws", "--report"])
+        self.assertEqual(code, 2)
+
+    def test_plain_export_requires_format(self):
+        code = ea.main(["ws"])
+        self.assertEqual(code, 2)
+
 
 class TestLiveShapes(unittest.TestCase):
     """Covers real Tetration response shapes discovered during post-flight."""
@@ -413,6 +443,121 @@ class TestLiveShapes(unittest.TestCase):
         self.assertIn("could not list workspaces", text)
         self.assertIn("401", text)
         self.assertNotIn("not found", text)
+
+
+class TestReport(unittest.TestCase):
+    def _resolved(self):
+        return {
+            "C": {"id": "C", "name": "frontend", "error": None,
+                  "addrset": ea.build_addrset(["10.0.0.1", "10.0.0.2"], None, 256)},
+            "P": {"id": "P", "name": "db", "error": None,
+                  "addrset": ea.build_addrset([], {"type": "subnet", "field": "ip",
+                                                   "value": "10.9.0.0/24"}, 256)},
+        }
+
+    def _policies(self):
+        return [{"id": "p1", "rank": "DEFAULT", "priority": 100, "action": "ALLOW",
+                 "consumer_filter_id": "C", "provider_filter_id": "P",
+                 "l4_params": [{"proto": 6, "port": [27017, 27017]}]}]
+
+    def test_expansion_summary(self):
+        self.assertEqual(ea._expansion_summary(
+            {"addrset": ea.build_addrset(["10.0.0.1", "10.0.0.2"], None, 256)}), "2 hosts")
+        self.assertEqual(ea._expansion_summary(
+            {"addrset": ea.build_addrset([], {"type": "subnet", "field": "ip",
+             "value": "10.9.0.0/24"}, 256)}), "10.9.0.0/24")
+        self.assertEqual(ea._expansion_summary(
+            {"addrset": ea.build_addrset([], None, 256)}), "0 hosts")
+        self.assertEqual(ea._expansion_summary({"error": "boom", "addrset":
+            ea.build_addrset([], None, 256)}), "unresolved")
+
+    def test_l4_summary(self):
+        self.assertEqual(ea._l4_summary([{"proto": 6, "port": [27017, 27017]}]), "tcp 27017")
+        self.assertEqual(ea._l4_summary([]), "ip (any)")
+        self.assertEqual(ea._l4_summary([{"proto": 6, "port": [80, 80]},
+                                         {"proto": 17, "port": [53, 53]}]), "tcp 80, udp 53")
+
+    def test_policy_table_with_provenance(self):
+        prov = {"p1": [10]}
+        out = "\n".join(ea.render_policy_table(self._policies(), self._resolved(), prov))
+        self.assertIn("| rank ", out)
+        self.assertIn("ACE seq", out)
+        self.assertIn("frontend", out)
+        self.assertIn("2 hosts", out)
+        self.assertIn("10.9.0.0/24", out)
+        self.assertIn("db", out)
+        self.assertIn("tcp 27017", out)
+        self.assertIn("| 10 |", out)  # seq column
+
+    def test_policy_table_skipped_policy(self):
+        res = self._resolved()
+        res["P"]["error"] = "unreadable"
+        out = "\n".join(ea.render_policy_table(self._policies(), res, {}))
+        self.assertIn("skipped", out.lower())
+
+    def test_render_report_has_sections(self):
+        policies = self._policies()
+        resolved = self._resolved()
+        prov = {}
+        ir = ea.build_ir(policies, resolved)
+        acl = ea.render_acl(ir, "nxos", "demo", provenance=prov)
+        report = ea.render_report(
+            ws={"name": "demo", "id": "42"}, ver=7, catch_all="DENY", fmt="nxos",
+            layout="single", policies=policies, resolved=resolved, ir=ir,
+            acl_lines=acl, provenance=prov, cluster_url="https://c",
+            now_iso="2026-07-08T00:00:00Z")
+        text = "\n".join(report)
+        self.assertIn("# CSW", text)
+        self.assertIn("## CSW Policy", text)
+        self.assertIn("## Generated ACL", text)
+        self.assertIn("```", text)                 # fenced ACL block
+        self.assertIn("ip access-list CSW_DEMO", text)
+        self.assertIn("demo", text)
+        self.assertIn("Catch-all", text)
+
+
+class TestExportReportCli(unittest.TestCase):
+    def _routes(self):
+        return {
+            ("GET", "/openapi/v1/applications"):
+                {"status": 200, "data": [{"id": "9", "name": "ws", "latest_adm_version": 2}]},
+            ("GET", "/openapi/v1/applications/9/policies?version=2"):
+                {"status": 200, "data": {"catch_all_action": "DENY", "absolute_policies": [],
+                 "default_policies": [{
+                    "id": "pol1", "rank": "DEFAULT", "action": "ALLOW", "priority": 100,
+                    "l4_params": [{"proto": 6, "port": [443, 443]}],
+                    "consumer_filter_id": "CL1", "provider_filter_id": "CL2",
+                    "consumer_filter": {"id": "CL1", "name": "web",
+                        "query": {"type": "eq", "field": "os", "value": "linux"}},
+                    "provider_filter": {"id": "CL2", "name": "db",
+                        "query": {"type": "subnet", "field": "ip", "value": "10.5.0.0/24"}},
+                 }]}},
+            ("POST", "/openapi/v1/inventory/search"):
+                {"status": 200, "data": {"results": [{"ip": "10.9.9.9"}]}},
+        }
+
+    def test_report_mode(self):
+        text, code = ea.export_report(fake_fetch(self._routes()), "ws", "ios", "single",
+                                      256, False, None, "c", "t", show_policy_only=False)
+        self.assertEqual(code, 0)
+        self.assertIn("## CSW Policy", text)
+        self.assertIn("## Generated ACL", text)
+        self.assertIn("web", text)
+        self.assertIn("permit tcp host 10.9.9.9 10.5.0.0 0.0.0.255 eq 443", text)
+
+    def test_show_policy_only(self):
+        text, code = ea.export_report(fake_fetch(self._routes()), "ws", "ios", "single",
+                                      256, False, None, "c", "t", show_policy_only=True)
+        self.assertEqual(code, 0)
+        self.assertIn("## CSW Policy", text)
+        self.assertNotIn("## Generated ACL", text)   # format not chosen yet
+
+    def test_report_workspace_error(self):
+        text, code = ea.export_report(fake_fetch({("GET", "/openapi/v1/applications"):
+                                      {"status": 401, "data": {}}}),
+                                      "ws", "ios", "single", 256, False, None, "c", "t")
+        self.assertEqual(code, 2)
+        self.assertIn("could not list workspaces", text)
 
 
 class TestDeterminism(unittest.TestCase):

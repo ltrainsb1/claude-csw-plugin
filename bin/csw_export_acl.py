@@ -260,7 +260,8 @@ def _addr_terms(fmt, ws_name, addrset, filter_name, side, groups):
     return [render_addr(e, fmt) for e in addrset["entries"]]
 
 
-def render_acl(ir, fmt, ws_name, log_denies=False, acl_suffix="", catch_all="DENY"):
+def render_acl(ir, fmt, ws_name, log_denies=False, acl_suffix="", catch_all="DENY",
+               provenance=None):
     groups, body, seq = {}, [], 10
     acl_name = f"CSW_{sanitize_name(ws_name)}" + (f"_{acl_suffix}" if acl_suffix else "")
     for ace in ir["aces"]:
@@ -281,6 +282,8 @@ def render_acl(ir, fmt, ws_name, log_denies=False, acl_suffix="", catch_all="DEN
                 if portstr:
                     parts.append(portstr)
                 body.append(f"{prefix}{seq} " + " ".join(parts) + note)
+                if provenance is not None:
+                    provenance.setdefault(ace["origin"]["policy_id"], []).append(seq)
                 seq += 10
     # Terminal ACE from the workspace's catch_all_action (verified live: the
     # policies envelope carries this; default DENY = whitelist model).
@@ -312,10 +315,11 @@ def _reverse_ir(ir):
     return {"aces": rev, "fidelity": ir["fidelity"], "has_errors": ir.get("has_errors", False)}
 
 
-def render_split(ir, fmt, ws_name, log_denies=False, catch_all="DENY"):
+def render_split(ir, fmt, ws_name, log_denies=False, catch_all="DENY", provenance=None):
     header = ["! layout=split — verify orientation: _IN applied inbound on the",
               "! consumer-facing interface, _OUT outbound (return traffic)."]
-    inbound = render_acl(ir, fmt, ws_name, log_denies, acl_suffix="IN", catch_all=catch_all)
+    inbound = render_acl(ir, fmt, ws_name, log_denies, acl_suffix="IN",
+                         catch_all=catch_all, provenance=provenance)
     # OUT is return traffic — default-deny regardless of the forward catch-all.
     outbound = render_acl(_reverse_ir(ir), fmt, ws_name, log_denies, acl_suffix="OUT")
     # Reversed TCP permits get 'established' so stateless hardware passes replies.
@@ -379,31 +383,10 @@ def _parse_policies(data):
     return None, None
 
 
-def export_acl(fetch, ws_query, fmt, layout, warn_members, log_denies,
-               version, cluster_url, now_iso):
-    if fmt not in FORMATS:
-        return f"! ERROR: unknown format {fmt!r} (choose nxos|ios-xr|ios)", 2
-    ws, wserr = _find_workspace(fetch, ws_query)
-    if wserr:
-        return f"! ERROR: {wserr}", 2
-    if ws is None:
-        return f"! ERROR: workspace {ws_query!r} not found (listing succeeded; no name/id match)", 2
-    ws_id = ws.get("id")
-    ver = version if version is not None else ws.get("latest_adm_version")
-    path = f"/openapi/v1/applications/{ws_id}/policies"
-    if ver is not None:
-        path += f"?version={ver}"
-    pres = fetch("GET", path)
-    policies, catch_all = (_parse_policies(pres.get("data"))
-                           if pres.get("status") == 200 else (None, None))
-    if policies is None:
-        return (f"! ERROR: could not read policies for workspace {ws.get('name')} "
-                f"(status {pres.get('status')})"), 2
-    catch_all = catch_all or "DENY"
-
-    # Resolve each unique filter once. Prefer the filter object embedded in the
-    # policy (carries a query for every filter_type incl. Cluster — verified
-    # live); fall back to fetch-by-id only when a policy omits the object.
+def _resolve_all(fetch, policies, warn_members):
+    """Resolve each unique filter once. Prefer the filter object embedded in the
+    policy (carries a query for every filter_type incl. Cluster — verified live);
+    fall back to fetch-by-id only when a policy omits the object."""
     fobjs = {}   # filter_id -> embedded filter object (or None)
     for p in policies:
         for side in ("consumer", "provider"):
@@ -421,16 +404,60 @@ def export_acl(fetch, ws_query, fmt, layout, warn_members, log_denies,
                                           obj.get("query"), warn_members)
         else:
             resolved[fid] = resolve_filter(fetch, fid, warn_members)
+    return resolved
 
-    ir = build_ir(policies, resolved)
+
+def _gather(fetch, ws_query, warn_members, version):
+    """Shared read pipeline for both ACL and report output: resolve workspace,
+    fetch + parse policies, resolve every referenced filter. Returns (ctx, None)
+    on success or (None, (error_text, exit_code)) on failure."""
+    ws, wserr = _find_workspace(fetch, ws_query)
+    if wserr:
+        return None, (f"! ERROR: {wserr}", 2)
+    if ws is None:
+        return None, (f"! ERROR: workspace {ws_query!r} not found "
+                      f"(listing succeeded; no name/id match)", 2)
+    ws_id = ws.get("id")
+    ver = version if version is not None else ws.get("latest_adm_version")
+    path = f"/openapi/v1/applications/{ws_id}/policies"
+    if ver is not None:
+        path += f"?version={ver}"
+    pres = fetch("GET", path)
+    policies, catch_all = (_parse_policies(pres.get("data"))
+                           if pres.get("status") == 200 else (None, None))
+    if policies is None:
+        return None, (f"! ERROR: could not read policies for workspace "
+                      f"{ws.get('name')} (status {pres.get('status')})", 2)
+    return {"ws": ws, "ws_id": ws_id, "ver": ver, "catch_all": catch_all or "DENY",
+            "policies": policies,
+            "resolved": _resolve_all(fetch, policies, warn_members)}, None
+
+
+def _render_body(ir, fmt, ws_name, layout, log_denies, catch_all, provenance=None):
+    """Render the ACL body lines for the chosen layout (shared by ACL + report)."""
     if layout == "split":
-        body = render_split(ir, fmt, ws.get("name", str(ws_id)), log_denies, catch_all=catch_all)
+        body = render_split(ir, fmt, ws_name, log_denies, catch_all=catch_all,
+                            provenance=provenance)
         ir["fidelity"].append(
             "layout=split: TCP return matched statelessly via 'established' (no port); "
             "non-TCP return is a plain reverse permit — a stateless approximation")
-    else:
-        body = render_acl(ir, fmt, ws.get("name", str(ws_id)), log_denies, catch_all=catch_all)
+        return body
+    return render_acl(ir, fmt, ws_name, log_denies, catch_all=catch_all,
+                      provenance=provenance)
 
+
+def export_acl(fetch, ws_query, fmt, layout, warn_members, log_denies,
+               version, cluster_url, now_iso):
+    if fmt not in FORMATS:
+        return f"! ERROR: unknown format {fmt!r} (choose nxos|ios-xr|ios)", 2
+    ctx, err = _gather(fetch, ws_query, warn_members, version)
+    if err:
+        return err
+    ws, ws_id, ver, catch_all = ctx["ws"], ctx["ws_id"], ctx["ver"], ctx["catch_all"]
+    policies, resolved = ctx["policies"], ctx["resolved"]
+
+    ir = build_ir(policies, resolved)
+    body = _render_body(ir, fmt, ws.get("name", str(ws_id)), layout, log_denies, catch_all)
     host_count = sum(r["addrset"]["total"] for r in resolved.values())
     header = render_header(ws.get("name", ""), ws_id, ver, cluster_url, fmt, layout,
                            now_iso, ace_count=len(ir["aces"]), host_count=host_count)
@@ -441,6 +468,142 @@ def export_acl(fetch, ws_query, fmt, layout, warn_members, log_denies,
     # lossy notes, not errors — they do not fail the run.
     exit_code = 1 if ir["has_errors"] else 0
     return text, exit_code
+
+
+# ---------------------------------------------------------------------------
+# Report output (markdown): CSW policy source + generated ACL, for review/audit.
+# ---------------------------------------------------------------------------
+
+def _md_cell(text):
+    """Make a value safe for a markdown table cell (escape pipes, flatten newlines)."""
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _expansion_summary(entry):
+    """Compact human string for a filter's resolved membership."""
+    if entry is None or entry.get("error"):
+        return "unresolved"
+    a = entry["addrset"]
+    if a["source"] == "subnet_query":
+        return str(a["entries"][0])
+    base = "0 hosts" if a["source"] == "empty" else f"{a['total']} hosts"
+    return base + (f" +{a['v6_dropped']}v6" if a.get("v6_dropped") else "")
+
+
+def _l4_summary(l4_params):
+    if not l4_params:
+        return "ip (any)"
+    parts = []
+    for l4 in l4_params:
+        proto, ports = parse_l4(l4)
+        if not ports:
+            parts.append(proto)
+        elif ports[0]["op"] == "eq":
+            parts.append(f"{proto} {ports[0]['val']}")
+        else:
+            parts.append(f"{proto} {ports[0]['lo']}-{ports[0]['hi']}")
+    return ", ".join(parts)
+
+
+def render_policy_table(policies, resolved, provenance=None):
+    """Markdown table of the CSW policy (source). When `provenance` (policy_id ->
+    [ACE seq numbers]) is given, add a '→ ACE seq' column mapping each policy to
+    the ACEs it produced; policies that produced none are marked 'skipped'."""
+    show_seq = provenance is not None
+    cols = ["#", "rank", "pri", "action", "consumer (expanded)",
+            "provider (expanded)", "L4"]
+    if show_seq:
+        cols.append("→ ACE seq")
+    lines = ["| " + " | ".join(cols) + " |",
+             "|" + "|".join(["---"] * len(cols)) + "|"]
+    ordered = sorted(policies,
+                     key=lambda p: (_rank_order(p), p.get("priority", 0), str(p.get("id"))))
+    for i, pol in enumerate(ordered, 1):
+        cons = resolved.get(pol.get("consumer_filter_id"))
+        prov = resolved.get(pol.get("provider_filter_id"))
+        cname = (cons or {}).get("name", pol.get("consumer_filter_id"))
+        pname = (prov or {}).get("name", pol.get("provider_filter_id"))
+        cells = [
+            str(i),
+            str(pol.get("rank", "")).upper() or "—",
+            str(pol.get("priority", "")),
+            str(pol.get("action", "")).upper(),
+            f"`{_md_cell(cname)}` ({_expansion_summary(cons)})",
+            f"`{_md_cell(pname)}` ({_expansion_summary(prov)})",
+            _md_cell(_l4_summary(pol.get("l4_params"))),
+        ]
+        if show_seq:
+            seqs = provenance.get(pol.get("id"))
+            cells.append(", ".join(str(s) for s in seqs) if seqs else "skipped")
+        lines.append("| " + " | ".join(cells) + " |")
+    return lines
+
+
+def render_report(ws, ver, catch_all, fmt, layout, policies, resolved, ir,
+                  acl_lines, provenance, cluster_url, now_iso):
+    host_count = sum(r["addrset"]["total"] for r in resolved.values())
+    skipped = sum(1 for n in ir["fidelity"] if "skipped" in n)
+    out = [
+        "# CSW → Cisco ACL Export Report",
+        "",
+        f"- **Cluster:** {cluster_url}",
+        f"- **Workspace:** {ws.get('name')} (`{ws.get('id')}`)",
+        f"- **Policy version:** {ver}  |  **Catch-all:** {catch_all}",
+        f"- **Format:** {fmt}  |  **Layout:** {layout}",
+        f"- **Generated:** {now_iso}",
+        f"- **Summary:** {len(policies)} policies → {len(ir['aces'])} ACEs, "
+        f"{host_count} hosts expanded"
+        + (f", {skipped} skipped" if skipped else ""),
+        "",
+        "## CSW Policy (source → ACL mapping)",
+        "",
+    ]
+    out += render_policy_table(policies, resolved, provenance)
+    out.append("")
+    if ir["fidelity"]:
+        out.append("_Fidelity notes:_")
+        out += [f"- {n}" for n in ir["fidelity"]]
+        out.append("")
+    out += [f"## Generated ACL — {fmt} ({layout})", "", "```", *acl_lines, "```", ""]
+    return out
+
+
+def export_report(fetch, ws_query, fmt, layout, warn_members, log_denies,
+                  version, cluster_url, now_iso, show_policy_only=False):
+    if not show_policy_only and fmt not in FORMATS:
+        return f"ERROR: unknown format {fmt!r} (choose nxos|ios-xr|ios)", 2
+    ctx, err = _gather(fetch, ws_query, warn_members, version)
+    if err:
+        text, code = err
+        return text.lstrip("! "), code   # markdown, not an ACL comment
+    ws, ws_id, ver, catch_all = ctx["ws"], ctx["ws_id"], ctx["ver"], ctx["catch_all"]
+    policies, resolved = ctx["policies"], ctx["resolved"]
+
+    if show_policy_only:
+        out = [
+            "# CSW Policy — pre-export review",
+            "",
+            f"- **Cluster:** {cluster_url}",
+            f"- **Workspace:** {ws.get('name')} (`{ws_id}`)",
+            f"- **Policy version:** {ver}  |  **Catch-all:** {catch_all}",
+            f"- **Policies:** {len(policies)}",
+            "",
+            "## CSW Policy (source)",
+            "",
+        ]
+        out += render_policy_table(policies, resolved, provenance=None)
+        out += ["",
+                "_Pick a format to generate the ACL: nxos | ios-xr | ios "
+                "(layout: single | split)._"]
+        return "\n".join(out) + "\n", 0
+
+    ir = build_ir(policies, resolved)
+    prov = {}
+    body = _render_body(ir, fmt, ws.get("name", str(ws_id)), layout, log_denies,
+                        catch_all, provenance=prov)
+    report = render_report(ws, ver, catch_all, fmt, layout, policies, resolved, ir,
+                           body, prov, cluster_url, now_iso)
+    return "\n".join(report) + "\n", (1 if ir["has_errors"] else 0)
 
 
 def build_fetch():
@@ -456,22 +619,37 @@ def main(argv=None):
         prog="csw_export_acl.py",
         description="Export a CSW workspace's policies to Cisco ACL syntax (read-only).")
     parser.add_argument("workspace", help="workspace name or id")
-    parser.add_argument("--format", required=True, choices=["nxos", "ios-xr", "ios"])
+    parser.add_argument("--format", choices=["nxos", "ios-xr", "ios"],
+                        help="ACL syntax (required unless --show-policy)")
     parser.add_argument("--layout", choices=["single", "split"], default="single")
     parser.add_argument("--warn-members", type=int, default=256)
     parser.add_argument("--log-denies", action="store_true")
     parser.add_argument("--version", type=int, default=None)
+    parser.add_argument("--report", action="store_true",
+                        help="emit a markdown report: CSW policy source + generated ACL")
+    parser.add_argument("--show-policy", action="store_true",
+                        help="emit only the CSW policy table (no ACL; format not needed) "
+                             "— used to review the policy before choosing a format")
     try:
         args = parser.parse_args(argv)
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else 2
 
+    if not args.format and not args.show_policy:
+        print("error: --format is required unless --show-policy is used")
+        return 2
+
     from datetime import datetime, timezone
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     cluster_url = os.environ.get("CSW_API_URL", "<cluster>")
-    text, code = export_acl(build_fetch(), args.workspace, args.format, args.layout,
-                            args.warn_members, args.log_denies, args.version,
-                            cluster_url, now_iso)
+    if args.show_policy or args.report:
+        text, code = export_report(build_fetch(), args.workspace, args.format, args.layout,
+                                   args.warn_members, args.log_denies, args.version,
+                                   cluster_url, now_iso, show_policy_only=args.show_policy)
+    else:
+        text, code = export_acl(build_fetch(), args.workspace, args.format, args.layout,
+                                args.warn_members, args.log_denies, args.version,
+                                cluster_url, now_iso)
     print(text)
     return code
 
